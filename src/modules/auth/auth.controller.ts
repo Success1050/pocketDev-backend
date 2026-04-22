@@ -4,13 +4,13 @@ import type { Response } from 'express';
 
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(private readonly authService: AuthService) { }
 
   @Get('github/login')
   async githubLogin(@Res() res: Response) {
     const clientId = process.env.GITHUB_CLIENT_ID;
     const redirectUri = process.env.GITHUB_CALLBACK_URL;
-    
+
     if (!clientId || !redirectUri) {
       throw new HttpException('GitHub configuration missing', HttpStatus.INTERNAL_SERVER_ERROR);
     }
