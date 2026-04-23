@@ -1,6 +1,6 @@
-import { Controller, Get, Query, Res, HttpException, HttpStatus } from '@nestjs/common';
-import { AuthService } from './auth.service';
+import { Controller, Get, HttpException, HttpStatus, Query, Res } from '@nestjs/common';
 import type { Response } from 'express';
+import { AuthService } from './auth.service';
 
 @Controller('auth')
 export class AuthController {
@@ -28,11 +28,24 @@ export class AuthController {
     try {
       const { user, token } = await this.authService.githubLogin(code);
 
-      // We redirect back to the React Native App via deep link.
-      // E.g., pocketdev://login?token=xyz
-      // For local testing, you can change this to your Expo URI
-      const deepLinkUrl = `pocketdev://login?token=${token}&userId=${user.id}`;
-      return res.redirect(deepLinkUrl);
+      // Deep link back into the app — path must match Linking.createURL('/(auth)/github')
+      const deepLinkUrl = `pocktdev://(auth)/github?token=${token}&userId=${user.id}`;
+
+      // Use an HTML page with a JS redirect instead of res.redirect() (HTTP 302).
+      // Android Chrome Custom Tabs silently ignore 302 redirects to custom URL
+      // schemes (pocktdev://), but window.location.href triggers the intent
+      // filter correctly and lets openAuthSessionAsync intercept the return.
+      return res.send(`<!DOCTYPE html>
+<html>
+  <head>
+    <title>Redirecting to PocketDev...</title>
+    <meta http-equiv="refresh" content="0;url=${deepLinkUrl}" />
+  </head>
+  <body>
+    <p>Redirecting back to PocketDev...</p>
+    <script>window.location.href = "${deepLinkUrl}";</script>
+  </body>
+</html>`);
     } catch (error) {
       throw new HttpException('Authentication failed', HttpStatus.UNAUTHORIZED);
     }
