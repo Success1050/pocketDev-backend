@@ -99,6 +99,7 @@ export class AuthService {
 
 
       return response.data.map((repo: any) => ({
+        id: repo.id,
         name: repo.name,
         lang: repo.language || 'Unknown',
         stars: repo.stargazers_count,
