@@ -29,7 +29,7 @@ export class AuthController {
       const { user, token } = await this.authService.githubLogin(code);
 
       // Deep link back into the app — path must match Linking.createURL('/(auth)/github')
-      const deepLinkUrl = `pocktdev://(auth)/github?token=${token}&userId=${user.id}`;
+      const deepLinkUrl = `pocktdev:///(auth)/github?token=${token}&userId=${user.id}`;
 
       // Use an HTML page with a JS redirect instead of res.redirect() (HTTP 302).
       // Android Chrome Custom Tabs silently ignore 302 redirects to custom URL
