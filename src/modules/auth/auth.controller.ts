@@ -1,4 +1,4 @@
-import { Controller, Get, HttpException, HttpStatus, Query, Res } from '@nestjs/common';
+import { Controller, Get, HttpException, HttpStatus, Param, Query, Res } from '@nestjs/common';
 import type { Response } from 'express';
 import { AuthService } from './auth.service';
 
@@ -49,5 +49,10 @@ export class AuthController {
     } catch (error) {
       throw new HttpException('Authentication failed', HttpStatus.UNAUTHORIZED);
     }
+  }
+
+  @Get('github/repos/:userId')
+  async getRepos(@Param('userId') userId: string) {
+    return this.authService.getRepositories(userId);
   }
 }
