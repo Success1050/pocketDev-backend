@@ -5,7 +5,7 @@ import * as jose from 'jose';
 
 @Injectable()
 export class AuthService {
-  constructor(private prisma: PrismaService) {}
+  constructor(private prisma: PrismaService) { }
 
   async githubLogin(code: string) {
     try {
@@ -94,6 +94,9 @@ export class AuthService {
           per_page: 50,
         },
       });
+
+      console.log('repos', response.data);
+
 
       return response.data.map((repo: any) => ({
         name: repo.name,
