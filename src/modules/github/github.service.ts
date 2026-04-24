@@ -36,6 +36,7 @@ export class GithubService {
         id: repo.id,
         name: repo.name,
         owner: repo.owner.login,
+        repoUrl: repo.html_url,
         lang: repo.language || 'Unknown',
         stars: repo.stargazers_count,
         private: repo.private,
