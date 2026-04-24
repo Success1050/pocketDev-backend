@@ -1,6 +1,6 @@
-import { Injectable, UnauthorizedException, HttpException, HttpStatus } from '@nestjs/common';
-import { PrismaService } from '../../core/prisma/prisma.service';
+import { HttpException, HttpStatus, Injectable, UnauthorizedException } from '@nestjs/common';
 import axios from 'axios';
+import { PrismaService } from '../../core/prisma/prisma.service';
 
 @Injectable()
 export class GithubService {
