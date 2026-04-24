@@ -27,6 +27,11 @@ export class GithubService {
         },
       });
 
+      if (!Array.isArray(response.data)) {
+        console.error('GitHub API did not return an array:', response.data);
+        return [];
+      }
+
       return response.data.map((repo: any) => ({
         id: repo.id,
         name: repo.name,
@@ -39,7 +44,9 @@ export class GithubService {
       }));
     } catch (error) {
       console.error('Fetch repos error:', error.response?.data || error.message);
-      throw new HttpException('Failed to fetch repositories', HttpStatus.INTERNAL_SERVER_ERROR);
+      const statusCode = error.response?.status || HttpStatus.INTERNAL_SERVER_ERROR;
+      const message = error.response?.data?.message || 'Failed to fetch repositories';
+      throw new HttpException(message, statusCode);
     }
   }
 
@@ -98,7 +105,12 @@ export class GithubService {
       return response.data;
     } catch (error) {
       console.error('Create branch error:', error.response?.data || error.message);
-      throw new HttpException('Failed to create branch', HttpStatus.INTERNAL_SERVER_ERROR);
+      const statusCode = error.response?.status || HttpStatus.INTERNAL_SERVER_ERROR;
+      const ghMessage = error.response?.data?.message || 'Failed to create branch';
+      throw new HttpException(
+        { message: ghMessage, errors: error.response?.data?.errors || [] },
+        statusCode,
+      );
     }
   }
 }
