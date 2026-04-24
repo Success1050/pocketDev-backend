@@ -74,41 +74,4 @@ export class AuthService {
       throw new UnauthorizedException('Authentication failed');
     }
   }
-
-  async getRepositories(userId: string) {
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-    });
-
-    if (!user || !user.accessToken) {
-      throw new UnauthorizedException('User not found or not connected to GitHub');
-    }
-
-    try {
-      const response = await axios.get('https://api.github.com/user/repos', {
-        headers: {
-          Authorization: `Bearer ${user.accessToken}`,
-        },
-        params: {
-          sort: 'updated',
-          per_page: 50,
-        },
-      });
-
-      console.log('repos', response.data);
-
-
-      return response.data.map((repo: any) => ({
-        id: repo.id,
-        name: repo.name,
-        lang: repo.language || 'Unknown',
-        stars: repo.stargazers_count,
-        private: repo.private,
-        description: repo.description,
-      }));
-    } catch (error) {
-      console.error('Fetch repos error:', error.response?.data || error.message);
-      throw new HttpException('Failed to fetch repositories', HttpStatus.INTERNAL_SERVER_ERROR);
-    }
-  }
 }

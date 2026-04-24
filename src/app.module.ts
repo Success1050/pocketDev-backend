@@ -7,6 +7,7 @@ import { UsersModule } from './modules/users/users.module';
 import { AgentModule } from './modules/agent/agent.module';
 import { DockerModule } from './modules/docker/docker.module';
 import { TasksModule } from './modules/tasks/tasks.module';
+import { GithubModule } from './modules/github/github.module';
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { TasksModule } from './modules/tasks/tasks.module';
     AgentModule,
     DockerModule,
     TasksModule,
+    GithubModule,
   ],
   controllers: [AppController],
   providers: [AppService],
