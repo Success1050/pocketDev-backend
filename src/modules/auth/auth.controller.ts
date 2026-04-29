@@ -50,4 +50,17 @@ export class AuthController {
       throw new HttpException('Authentication failed', HttpStatus.UNAUTHORIZED);
     }
   }
+
+  @Post('logout')
+  async logout(@Body('userId') userId: string) {
+    if (!userId) {
+      throw new HttpException('User ID required', HttpStatus.BAD_REQUEST);
+    }
+    try {
+      await this.authService.logout(userId);
+      return { message: 'Logged out successfully' };
+    } catch (error) {
+      throw new HttpException('Logout failed', HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+  }
 }

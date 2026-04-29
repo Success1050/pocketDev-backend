@@ -91,6 +91,8 @@ export class GithubService {
         },
       });
 
+      console.log(baseBranchResponse.data)
+
       const sha = baseBranchResponse.data.object.sha;
 
       // 2. Create the new branch
