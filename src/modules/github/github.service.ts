@@ -18,7 +18,7 @@ export class GithubService {
     try {
       const response = await axios.get('https://api.github.com/user/repos', {
         headers: {
-          Authorization: `Bearer ${user.accessToken}`,
+          Authorization: `token ${user.accessToken}`,
         },
         params: {
           sort: 'updated',
