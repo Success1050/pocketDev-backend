@@ -15,7 +15,14 @@ export class AuthController {
       throw new HttpException('GitHub configuration missing', HttpStatus.INTERNAL_SERVER_ERROR);
     }
 
-    const githubUrl = `https://github.com/login/oauth/authorize?client_id=${clientId}&redirect_uri=${redirectUri}&scope=user:email`;
+    const params = new URLSearchParams({
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      scope: 'user:email repo',
+    });
+
+    const githubUrl = `https://github.com/login/oauth/authorize?${params.toString()}`;
+    console.log('Redirecting to GitHub:', githubUrl);
     return res.redirect(githubUrl);
   }
 

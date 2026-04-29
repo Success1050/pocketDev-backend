@@ -12,7 +12,7 @@ export class GithubService {
     }
     try {
       await axios.get('https://api.github.com/user', {
-        headers: { Authorization: `token ${user.accessToken}` },
+        headers: { Authorization: `Bearer ${user.accessToken}` },
       });
     } catch (err) {
       if (err.response?.status === 401) {
@@ -39,7 +39,7 @@ export class GithubService {
     try {
       const response = await axios.get('https://api.github.com/user/repos', {
         headers: {
-          Authorization: `token ${user.accessToken}`,
+          Authorization: `Bearer ${user.accessToken}`,
         },
         params: {
           sort: 'updated',
@@ -86,7 +86,7 @@ export class GithubService {
     try {
       const response = await axios.get(`https://api.github.com/repos/${owner}/${repo}/branches`, {
         headers: {
-          Authorization: `token ${user.accessToken}`,
+          Authorization: `Bearer ${user.accessToken}`,
         },
       });
 
@@ -112,7 +112,7 @@ export class GithubService {
       // 1. Get the SHA of the base branch
       const baseBranchResponse = await axios.get(`https://api.github.com/repos/${owner}/${repo}/git/ref/heads/${baseBranch}`, {
         headers: {
-          Authorization: `token ${user.accessToken}`,
+          Authorization: `Bearer ${user.accessToken}`,
         },
       });
 
@@ -124,7 +124,7 @@ export class GithubService {
         sha,
       }, {
         headers: {
-          Authorization: `token ${user.accessToken}`,
+          Authorization: `Bearer ${user.accessToken}`,
         },
       });
 
