@@ -6,6 +6,25 @@ import { PrismaService } from '../../core/prisma/prisma.service';
 export class GithubService {
   constructor(private prisma: PrismaService) { }
 
+  private async assertTokenIsValid(user: { accessToken?: string | null }) {
+    if (!user?.accessToken) {
+      throw new UnauthorizedException('No GitHub token stored');
+    }
+    try {
+      await axios.get('https://api.github.com/user', {
+        headers: { Authorization: `token ${user.accessToken}` },
+      });
+    } catch (err) {
+      if (err.response?.status === 401) {
+        throw new HttpException(
+          { message: 'GitHub token invalid', code: 'GH_TOKEN_INVALID' },
+          HttpStatus.UNAUTHORIZED,
+        );
+      }
+      throw err;
+    }
+  }
+
   async getRepositories(userId: string, page: number = 1, perPage: number = 20) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
@@ -14,6 +33,8 @@ export class GithubService {
     if (!user || !user.accessToken) {
       throw new UnauthorizedException('User not found or not connected to GitHub');
     }
+
+    await this.assertTokenIsValid(user);
 
     try {
       const response = await axios.get('https://api.github.com/user/repos', {
@@ -60,10 +81,12 @@ export class GithubService {
       throw new UnauthorizedException('User not found or not connected to GitHub');
     }
 
+    await this.assertTokenIsValid(user);
+
     try {
       const response = await axios.get(`https://api.github.com/repos/${owner}/${repo}/branches`, {
         headers: {
-          Authorization: `Bearer ${user.accessToken}`,
+          Authorization: `token ${user.accessToken}`,
         },
       });
 
@@ -83,15 +106,15 @@ export class GithubService {
       throw new UnauthorizedException('User not found or not connected to GitHub');
     }
 
+    await this.assertTokenIsValid(user);
+
     try {
       // 1. Get the SHA of the base branch
       const baseBranchResponse = await axios.get(`https://api.github.com/repos/${owner}/${repo}/git/ref/heads/${baseBranch}`, {
         headers: {
-          Authorization: `Bearer ${user.accessToken}`,
+          Authorization: `token ${user.accessToken}`,
         },
       });
-
-      console.log(baseBranchResponse.data)
 
       const sha = baseBranchResponse.data.object.sha;
 
@@ -101,7 +124,7 @@ export class GithubService {
         sha,
       }, {
         headers: {
-          Authorization: `Bearer ${user.accessToken}`,
+          Authorization: `token ${user.accessToken}`,
         },
       });
 
