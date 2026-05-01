@@ -34,4 +34,39 @@ export class TasksService {
 
     return task;
   }
+
+  async getTask(taskId: string) {
+    return this.prisma.task.findUnique({
+      where: { id: taskId },
+      include: {
+        taskLogs: {
+          orderBy: { createdAt: 'asc' },
+        },
+      },
+    });
+  }
+
+  async getUserTasks(userId: string) {
+    return this.prisma.task.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+      include: {
+        taskLogs: {
+          orderBy: { createdAt: 'asc' },
+        },
+      },
+    });
+  }
+
+  async getLatestTask(userId: string) {
+    return this.prisma.task.findFirst({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+      include: {
+        taskLogs: {
+          orderBy: { createdAt: 'asc' },
+        },
+      },
+    });
+  }
 }
