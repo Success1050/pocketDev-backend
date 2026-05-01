@@ -1,14 +1,15 @@
-import { Controller, Post, Body, Req, UseGuards } from '@nestjs/common';
+import { Controller, Post, Body, Req, UseInterceptors } from '@nestjs/common';
 import { TasksService } from './tasks.service';
+import { AuthInterceptor } from '../auth/auth.interceptor';
 
 @Controller('tasks')
+@UseInterceptors(AuthInterceptor)
 export class TasksController {
-  constructor(private readonly tasksService: TasksService) {}
+  constructor(private readonly tasksService: TasksService) { }
 
   @Post()
   async create(@Body() body: any, @Req() req: any) {
-    // Note: Add JWT auth guard in production to extract req.user
-    const userId = req.user?.id || 'default-user-id';
-    return this.tasksService.createTask(userId, body.description, body.repoName);
+    const userId = req.user?.id;
+    return this.tasksService.createTask(userId, body);
   }
 }

@@ -9,19 +9,26 @@ export class TasksService {
     private readonly agentService: AgentService,
   ) {}
 
-  async createTask(userId: string, description: string, repoName: string) {
+  async createTask(userId: string, payload: any) {
     // 1. Create task in DB
     const task = await this.prisma.task.create({
       data: {
         userId,
-        description,
-        repoName,
+        description: payload.instruction,
+        repoName: payload.repo?.name,
+        repoOwner: payload.repo?.owner,
+        repoUrl: payload.repo?.url,
+        branchName: payload.branch?.name,
+        baseBranch: payload.branch?.baseBranch,
+        projectId: payload.meta?.projectId,
+        llmProvider: payload.llm?.provider,
+        llmModel: payload.llm?.model,
         status: 'pending',
       },
     });
 
     // 2. Queue or execute task async
-    this.agentService.processTask(task.id, description).catch(err => {
+    this.agentService.processTask(task.id, payload).catch(err => {
       console.error('Task processing failed', err);
     });
 

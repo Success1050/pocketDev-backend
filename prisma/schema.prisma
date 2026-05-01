@@ -35,7 +35,13 @@ model Task {
   user        User     @relation(fields: [userId], references: [id])
   logs        String?  // Could be related to a separate Log model instead
   repoName    String?
+  repoOwner   String?
+  repoUrl     String?
   branchName  String?
+  baseBranch  String?
+  projectId   String?
+  llmProvider String?
+  llmModel    String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 }
