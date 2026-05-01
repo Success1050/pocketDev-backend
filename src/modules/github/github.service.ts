@@ -63,6 +63,7 @@ export class GithubService {
         private: repo.private,
         description: repo.description,
         defaultBranch: repo.default_branch,
+        homepage: repo.homepage,
       }));
     } catch (error) {
       console.error('Fetch repos error:', error.response?.data || error.message);
