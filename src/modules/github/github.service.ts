@@ -53,6 +53,8 @@ export class GithubService {
         return [];
       }
 
+      console.log(response.data);
+
       return response.data.map((repo: any) => ({
         id: repo.id,
         name: repo.name,
