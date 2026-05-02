@@ -22,6 +22,7 @@ import { JobsModule } from './modules/jobs/jobs.module';
         port: parseInt(process.env.REDIS_PORT || '6379', 10),
         password: process.env.REDIS_PASSWORD || undefined,
         maxRetriesPerRequest: null,
+        ...(process.env.REDIS_HOST && process.env.REDIS_HOST !== 'localhost' ? { tls: {} } : {}),
       },
     }),
     // Scheduled tasks support (cron jobs, intervals, timeouts)
