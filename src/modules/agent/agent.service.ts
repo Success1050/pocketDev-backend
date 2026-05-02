@@ -1,13 +1,52 @@
 import { Injectable } from '@nestjs/common';
 import { DockerService } from '../docker/docker.service';
 import { PrismaService } from '../../core/prisma/prisma.service';
-
+import { generateText } from 'ai';
+import { createOpenAI } from '@ai-sdk/openai';
+import { createAnthropic } from '@ai-sdk/anthropic';
 @Injectable()
 export class AgentService {
   constructor(
     private readonly dockerService: DockerService,
     private readonly prisma: PrismaService,
   ) { }
+
+  private getModel(providerName?: string, modelName?: string) {
+    const provider = providerName?.toLowerCase() || 'openai';
+    const model = modelName || 'gpt-4o';
+
+    if (provider === 'anthropic') {
+      const anthropic = createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+      return anthropic(model);
+    }
+    
+    // Default to OpenAI
+    const openai = createOpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    return openai(model);
+  }
+
+  getAvailableModels() {
+    return [
+      {
+        providerId: 'openai',
+        name: 'OpenAI',
+        models: [
+          { id: 'gpt-4o', name: 'GPT-4o (Recommended)' },
+          { id: 'gpt-4-turbo', name: 'GPT-4 Turbo' },
+          { id: 'gpt-3.5-turbo', name: 'GPT-3.5 Turbo' },
+        ],
+      },
+      {
+        providerId: 'anthropic',
+        name: 'Anthropic',
+        models: [
+          { id: 'claude-3-5-sonnet-20240620', name: 'Claude 3.5 Sonnet' },
+          { id: 'claude-3-opus-20240229', name: 'Claude 3 Opus' },
+          { id: 'claude-3-haiku-20240307', name: 'Claude 3 Haiku' },
+        ],
+      },
+    ];
+  }
 
   /**
    * Append a structured log entry to the TaskLog table.
@@ -43,26 +82,38 @@ export class AgentService {
       await this.addLog(taskId, 'process', `Sending instruction to ${payload.llm?.provider} (${payload.llm?.model})...`);
       await this.addLog(taskId, 'info', `Instruction: "${payload.instruction}"`);
 
-      // Simulated AI Loop
       let isTaskComplete = false;
       let loopCount = 0;
+
+      const aiModel = this.getModel(payload.llm?.provider, payload.llm?.model);
 
       while (!isTaskComplete && loopCount < 5) {
         loopCount++;
         await this.addLog(taskId, 'process', `AI thinking... (iteration ${loopCount})`);
 
-        // Simulate a delay for realistic feel
-        await new Promise(resolve => setTimeout(resolve, 1500));
+        try {
+          const { text } = await generateText({
+            model: aiModel,
+            prompt: `You are an AI developer agent. The user wants you to: ${payload.instruction}. 
+            We are in iteration ${loopCount}. Output a single bash command to execute in the workspace to make progress on this task.
+            Do not include markdown formatting or backticks, just the raw bash command.
+            If you want to create a file, use echo or cat. If you think the task is done, output: echo "DONE"`,
+          });
 
-        const aiChosenCommand = `echo "Executing AI logic for: ${payload.instruction}" > ai_output.txt`;
-        await this.addLog(taskId, 'info', `> ${aiChosenCommand}`);
+          const aiChosenCommand = text.trim();
+          await this.addLog(taskId, 'info', `> ${aiChosenCommand}`);
 
-        const result = await this.dockerService.executeCommand(containerId, aiChosenCommand);
-        await this.addLog(taskId, 'info', `Tool output: ${result.stdout}`);
+          const result = await this.dockerService.executeCommand(containerId, aiChosenCommand);
+          await this.addLog(taskId, 'info', `Tool output: ${result.stdout}`);
 
-        if (loopCount === 2) {
-          await this.addLog(taskId, 'success', `AI completed code modifications`);
-          isTaskComplete = true;
+          // For safety, we keep the loopCount limit. If the AI outputs DONE, we finish.
+          if (aiChosenCommand.includes('DONE') || loopCount === 2) {
+            await this.addLog(taskId, 'success', `AI completed code modifications`);
+            isTaskComplete = true;
+          }
+        } catch (error) {
+          await this.addLog(taskId, 'error', `AI Generation failed: ${error.message}`);
+          break; // Exit the loop on failure
         }
       }
 
