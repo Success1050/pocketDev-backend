@@ -24,7 +24,9 @@ model User {
   refreshToken String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-  tasks     Task[]
+  pushToken      String?
+  tasks          Task[]
+  notifications  Notification[]
 }
 
 model Task {
@@ -43,9 +45,10 @@ model Task {
   llmProvider String?
   llmModel    String?
   previewUrl  String?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-  taskLogs    TaskLog[]
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  taskLogs       TaskLog[]
+  notifications  Notification[]
 }
 
 model TaskLog {
@@ -55,4 +58,36 @@ model TaskLog {
   type      String   @default("info")  // info | success | warning | error | process
   message   String
   createdAt DateTime @default(now())
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  taskId    String?
+  task      Task?    @relation(fields: [taskId], references: [id])
+  type      String   @default("info")   // info | success | error | warning
+  title     String
+  body      String
+  data      String?  // JSON-serialized metadata
+  read      Boolean  @default(false)
+  pushed    Boolean  @default(false)    // Whether push notification was sent
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model BackgroundJob {
+  id          String   @id @default(uuid())
+  queueName   String
+  jobType     String
+  payload     String   // JSON-serialized payload
+  status      String   @default("queued")  // queued | processing | completed | failed
+  attempts    Int      @default(0)
+  maxAttempts Int      @default(3)
+  result      String?  // JSON-serialized result
+  error       String?
+  userId      String?
+  taskId      String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 }

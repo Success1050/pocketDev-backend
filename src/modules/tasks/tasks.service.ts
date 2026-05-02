@@ -1,12 +1,16 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../core/prisma/prisma.service';
 import { AgentService } from '../agent/agent.service';
+import { JobProducerService } from '../jobs/job-producer.service';
 
 @Injectable()
 export class TasksService {
+  private readonly logger = new Logger(TasksService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly agentService: AgentService,
+    private readonly jobProducer: JobProducerService,
   ) {}
 
   async createTask(userId: string, payload: any) {
@@ -27,12 +31,33 @@ export class TasksService {
       },
     });
 
-    // 2. Queue or execute task async
-    this.agentService.processTask(task.id, payload).catch(err => {
-      console.error('Task processing failed', err);
-    });
+    // 2. Enqueue task for background processing via BullMQ.
+    //    This ensures the task continues processing even if the user exits the app.
+    //    On completion/failure, a push notification will be sent automatically.
+    try {
+      const { jobId, backgroundJobId } = await this.jobProducer.enqueueTask({
+        taskId: task.id,
+        userId,
+        payload,
+      });
+
+      this.logger.log(`Task ${task.id} enqueued — job: ${jobId}, bgJob: ${backgroundJobId}`);
+    } catch (error) {
+      // If Redis/queue is unavailable, fall back to direct processing
+      this.logger.warn(`Queue unavailable, falling back to direct processing: ${error.message}`);
+      this.agentService.processTask(task.id, payload).catch(err => {
+        this.logger.error('Direct task processing failed', err);
+      });
+    }
 
     return task;
+  }
+
+  async savePushToken(userId: string, pushToken: string) {
+    return this.prisma.user.update({
+      where: { id: userId },
+      data: { pushToken },
+    });
   }
 
   async getTask(taskId: string) {
@@ -43,6 +68,12 @@ export class TasksService {
           orderBy: { createdAt: 'asc' },
         },
       },
+    });
+  }
+
+  async clearLogs(taskId: string) {
+    return this.prisma.taskLog.deleteMany({
+      where: { taskId },
     });
   }
 
