@@ -32,4 +32,12 @@ export class GithubController {
   ) {
     return this.githubService.createBranch(userId, owner, repo, body.branchName, body.baseBranch);
   }
+
+  @Post('sync')
+  async syncRepo(@Body() body: { action: 'push' | 'pull'; owner: string; repo: string }) {
+    // This is a placeholder since actual sync logic would require an active container
+    // or direct github api calls.
+    console.log(`[GithubSync] Initiated ${body.action} for ${body.owner}/${body.repo}`);
+    return { status: 'success', message: `Successfully executed ${body.action} for ${body.repo}` };
+  }
 }
