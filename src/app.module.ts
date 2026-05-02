@@ -25,7 +25,6 @@ import { JobsModule } from './modules/jobs/jobs.module';
         ...(process.env.REDIS_HOST && process.env.REDIS_HOST !== 'localhost' ? { tls: {} } : {}),
       },
     }),
-    // Scheduled tasks support (cron jobs, intervals, timeouts)
     ScheduleModule.forRoot(),
     PrismaModule,
     AuthModule,
@@ -40,4 +39,4 @@ import { JobsModule } from './modules/jobs/jobs.module';
   controllers: [AppController],
   providers: [AppService],
 })
-export class AppModule {}
+export class AppModule { }
