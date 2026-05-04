@@ -12,6 +12,7 @@ import { TasksModule } from './modules/tasks/tasks.module';
 import { GithubModule } from './modules/github/github.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { JobsModule } from './modules/jobs/jobs.module';
+import { RevenueCatModule } from './modules/revenuecat/revenuecat.module';
 
 @Module({
   imports: [
@@ -35,6 +36,7 @@ import { JobsModule } from './modules/jobs/jobs.module';
     GithubModule,
     NotificationsModule,
     JobsModule,
+    RevenueCatModule,
   ],
   controllers: [AppController],
   providers: [AppService],

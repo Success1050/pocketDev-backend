@@ -25,6 +25,8 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   pushToken      String?
+  isPremium      Boolean  @default(false)
+  subscriptionId String? // RevenueCat original_app_user_id or subscriber id
   tasks          Task[]
   notifications  Notification[]
 }
