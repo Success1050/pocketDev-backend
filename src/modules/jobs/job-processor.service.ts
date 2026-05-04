@@ -79,10 +79,10 @@ export class JobProcessorService extends WorkerHost {
         userId,
         taskId,
         type: isSuccess ? 'success' : 'error',
-        title: isSuccess ? '✅ Task Completed!' : '❌ Task Failed',
+        title: isSuccess ? 'Task successful ✅' : 'Task unsuccessful ❌',
         body: isSuccess
           ? `Your task "${task?.description?.slice(0, 60)}..." has been completed successfully.`
-          : `Your task "${task?.description?.slice(0, 60)}..." has failed. Check the logs for details.`,
+          : `Your task "${task?.description?.slice(0, 60)}..." was not successful. Please check the logs.`,
         data: {
           taskId,
           status: task?.status,
@@ -93,10 +93,10 @@ export class JobProcessorService extends WorkerHost {
       // Send push notification (works even if app is closed)
       const pushed = await this.pushService.sendPushToUser({
         userId,
-        title: isSuccess ? '✅ Task Completed!' : '❌ Task Failed',
+        title: isSuccess ? 'Task successful ✅' : 'Task unsuccessful ❌',
         body: isSuccess
           ? `Your task has been completed successfully.`
-          : `Your task failed. Tap to view details.`,
+          : `Your task was not successful. Tap to view details.`,
         data: { taskId, notificationId: notification.id, screen: 'TaskDetail' },
       });
 
@@ -128,14 +128,14 @@ export class JobProcessorService extends WorkerHost {
         userId,
         taskId,
         type: 'error',
-        title: '❌ Task Failed',
+        title: 'Task unsuccessful ❌',
         body: `An error occurred while processing your task: ${error.message?.slice(0, 100)}`,
         data: { taskId, error: error.message },
       });
 
       await this.pushService.sendPushToUser({
         userId,
-        title: '❌ Task Failed',
+        title: 'Task unsuccessful ❌',
         body: 'An error occurred while processing your task. Tap to view details.',
         data: { taskId, notificationId: notification.id, screen: 'TaskDetail' },
       });
