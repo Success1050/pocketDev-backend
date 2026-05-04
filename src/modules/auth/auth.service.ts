@@ -16,6 +16,7 @@ export class AuthService {
           client_id: process.env.GITHUB_CLIENT_ID,
           client_secret: process.env.GITHUB_CLIENT_SECRET,
           code,
+          redirect_uri: process.env.GITHUB_CALLBACK_URL,
         },
         {
           headers: {
@@ -26,7 +27,10 @@ export class AuthService {
 
       const accessToken = tokenResponse.data.access_token;
       if (!accessToken) {
-        throw new UnauthorizedException('Failed to obtain access token from GitHub');
+        console.error('GitHub token exchange response:', tokenResponse.data);
+        throw new UnauthorizedException(
+          tokenResponse.data.error_description || 'Failed to obtain access token from GitHub',
+        );
       }
 
       // 2. Fetch user profile from GitHub
