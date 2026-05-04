@@ -19,7 +19,7 @@ export class AgentService {
       const anthropic = createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
       return anthropic(model);
     }
-    
+
     // Default to OpenAI
     const openai = createOpenAI({ apiKey: process.env.OPENAI_API_KEY });
     return openai(model);
@@ -134,8 +134,8 @@ export class AgentService {
       await this.dockerService.commitAndPush(containerId, targetBranch, `AI: ${payload.instruction}`);
       await this.addLog(taskId, 'success', `✓ Changes pushed to ${targetBranch}`);
 
-      // Step 6: Generate preview URL (simulated)
-      const previewUrl = `https://${payload.repo?.name}-preview.vercel.app`;
+      // Step 6: Generate preview URL (using repo homepage if available)
+      const previewUrl = payload.repo?.homepage || `https://${payload.repo?.name}-preview.vercel.app`;
       await this.prisma.task.update({
         where: { id: taskId },
         data: { status: 'completed', logs: 'Build successful', previewUrl },

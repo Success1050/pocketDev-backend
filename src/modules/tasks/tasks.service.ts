@@ -28,6 +28,7 @@ export class TasksService {
         llmProvider: payload.llm?.provider,
         llmModel: payload.llm?.model,
         status: 'pending',
+        previewUrl: payload.repo?.homepage,
       },
     });
 
