@@ -7,7 +7,7 @@ export class AuthController {
   constructor(private readonly authService: AuthService) { }
 
   @Get('github/login')
-  async githubLogin(@Res() res: Response) {
+  async githubLogin(@Query('platform') platform: string, @Res() res: Response) {
     const clientId = process.env.GITHUB_CLIENT_ID;
     const redirectUri = process.env.GITHUB_CALLBACK_URL;
 
@@ -15,10 +15,13 @@ export class AuthController {
       throw new HttpException('GitHub configuration missing', HttpStatus.INTERNAL_SERVER_ERROR);
     }
 
+    const state = platform === 'web' ? 'web' : 'mobile';
+
     const params = new URLSearchParams({
       client_id: clientId,
       redirect_uri: redirectUri,
       scope: 'user:email repo',
+      state: state,
     });
 
     const githubUrl = `https://github.com/login/oauth/authorize?${params.toString()}`;
@@ -27,13 +30,18 @@ export class AuthController {
   }
 
   @Get('github/callback')
-  async githubCallback(@Query('code') code: string, @Res() res: Response) {
+  async githubCallback(@Query('code') code: string, @Query('state') state: string, @Res() res: Response) {
     if (!code) {
       throw new HttpException('No code provided', HttpStatus.BAD_REQUEST);
     }
 
     try {
       const { user, token } = await this.authService.githubLogin(code);
+
+      if (state === 'web') {
+        const webUrl = `http://localhost:3000/auth/github?token=${token}&userId=${user.id}`;
+        return res.redirect(webUrl);
+      }
 
       // Deep link back into the app — path must match Linking.createURL('/(auth)/github')
       const deepLinkUrl = `pocktdev:///(auth)/github?token=${token}&userId=${user.id}`;
