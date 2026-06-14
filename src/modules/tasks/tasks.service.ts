@@ -78,6 +78,25 @@ export class TasksService {
     });
   }
 
+  async approvePlan(taskId: string) {
+    return this.prisma.task.update({
+      where: { id: taskId },
+      data: { status: 'plan-approved' },
+    });
+  }
+
+  async provideFeedback(taskId: string, feedback: string) {
+    const task = await this.prisma.task.findUnique({ where: { id: taskId } });
+    if (!task) throw new Error('Task not found');
+    return this.prisma.task.update({
+      where: { id: taskId },
+      data: { 
+        status: 'plan-rejected', 
+        description: `${task.description}\n\n[USER FEEDBACK ON PLAN]: ${feedback}`
+      },
+    });
+  }
+
   async getUserTasks(userId: string) {
     return this.prisma.task.findMany({
       where: { userId },

@@ -39,7 +39,8 @@ export class AuthController {
       const { user, token } = await this.authService.githubLogin(code);
 
       if (state === 'web') {
-        const webUrl = `http://localhost:3000/auth/github?token=${token}&userId=${user.id}`;
+        const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3001';
+        const webUrl = `${frontendUrl}/auth/github?token=${token}&userId=${user.id}`;
         return res.redirect(webUrl);
       }
 

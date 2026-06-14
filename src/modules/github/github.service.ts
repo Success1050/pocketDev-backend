@@ -25,7 +25,7 @@ export class GithubService {
     }
   }
 
-  async getRepositories(userId: string, page: number = 1, perPage: number = 20) {
+  async getRepositories(userId: string, page: number = 1, perPage: number = 100) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
     });

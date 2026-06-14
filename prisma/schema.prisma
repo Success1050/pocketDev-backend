@@ -43,6 +43,8 @@ model Task {
   repoUrl     String?
   branchName  String?
   baseBranch  String?
+  plan        String?
+  diff        String?
   projectId   String?
   llmProvider String?
   llmModel    String?

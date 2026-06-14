@@ -30,6 +30,16 @@ export class TasksController {
     return this.tasksService.clearLogs(id);
   }
 
+  @Post(':id/approve-plan')
+  async approvePlan(@Param('id') id: string) {
+    return this.tasksService.approvePlan(id);
+  }
+
+  @Post(':id/feedback')
+  async provideFeedback(@Param('id') id: string, @Body() body: { feedback: string }) {
+    return this.tasksService.provideFeedback(id, body.feedback);
+  }
+
   @Get(':id')
   async getOne(@Param('id') id: string) {
     return this.tasksService.getTask(id);

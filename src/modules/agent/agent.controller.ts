@@ -6,10 +6,10 @@ export class AgentController {
   constructor(private readonly agentService: AgentService) {}
 
   @Get('models')
-  getModels() {
+  async getModels() {
     return {
       status: 'success',
-      data: this.agentService.getAvailableModels(),
+      data: await this.agentService.getAvailableModels(),
     };
   }
 
