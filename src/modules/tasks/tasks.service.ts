@@ -25,10 +25,17 @@ export class TasksService {
         branchName: payload.branch?.name,
         baseBranch: payload.branch?.baseBranch,
         projectId: payload.meta?.projectId,
+        secondaryRepoName: payload.secondaryRepo?.name,
+        secondaryRepoOwner: payload.secondaryRepo?.owner,
+        secondaryRepoUrl: payload.secondaryRepo?.url,
+        secondaryBranchName: payload.secondaryBranch?.name,
+        secondaryBaseBranch: payload.secondaryBranch?.baseBranch,
+        secondaryProjectId: payload.meta?.secondaryProjectId,
         llmProvider: payload.llm?.provider,
         llmModel: payload.llm?.model,
         status: 'pending',
         previewUrl: payload.repo?.homepage,
+        attachments: payload.attachments ? JSON.stringify(payload.attachments) : null,
       },
     });
 
@@ -85,6 +92,18 @@ export class TasksService {
     });
   }
 
+  async cancelTask(taskId: string) {
+    const task = await this.prisma.task.update({
+      where: { id: taskId },
+      data: { status: 'cancelled' },
+    });
+    // Hard kill the underlying docker container immediately if it's currently executing
+    this.agentService.cancelTaskExecution(taskId).catch(err => 
+      this.logger.error(`Failed to cancel agent execution for ${taskId}`, err)
+    );
+    return task;
+  }
+
   async provideFeedback(taskId: string, feedback: string) {
     const task = await this.prisma.task.findUnique({ where: { id: taskId } });
     if (!task) throw new Error('Task not found');
@@ -119,5 +138,37 @@ export class TasksService {
         },
       },
     });
+  }
+
+  async commitTask(taskId: string) {
+    // This runs asynchronously so the API returns quickly
+    this.agentService.commitAndPushTask(taskId).catch(err => {
+      this.logger.error(`Failed to commit task ${taskId}`, err);
+    });
+    return { success: true, message: 'Pushing changes...' };
+  }
+
+  async discardTask(taskId: string) {
+    // This also runs asynchronously
+    this.agentService.discardTask(taskId).catch(err => {
+      this.logger.error(`Failed to discard task ${taskId}`, err);
+    });
+    return { success: true, message: 'Discarding changes...' };
+  }
+
+  async refineTask(taskId: string, instruction: string, attachments?: string[]) {
+    // This runs asynchronously
+    this.agentService.refineTask(taskId, instruction, attachments).catch(err => {
+      this.logger.error(`Failed to refine task ${taskId}`, err);
+    });
+    return { success: true, message: 'Refining changes...' };
+  }
+
+  async mergeTask(taskId: string, targetBranch: string) {
+    // This runs asynchronously
+    this.agentService.mergeTask(taskId, targetBranch).catch(err => {
+      this.logger.error(`Failed to merge task ${taskId}`, err);
+    });
+    return { success: true, message: `Merging into ${targetBranch}...` };
   }
 }

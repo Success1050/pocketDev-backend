@@ -1,12 +1,18 @@
 import { Module } from '@nestjs/common';
-import { AgentModule } from '../agent/agent.module';
-import { JobsModule } from '../jobs/jobs.module';
 import { TasksService } from './tasks.service';
 import { TasksController } from './tasks.controller';
+import { PrismaClient } from '@prisma/client';
+import { JobsModule } from '../jobs/jobs.module';
+import { AgentModule } from '../agent/agent.module';
+import { UploadController } from './upload.controller';
+import { DownloadController } from './download.controller';
+import { PublishGithubController } from './publish-github.controller';
+import { DockerModule } from '../docker/docker.module';
 
 @Module({
-  imports: [AgentModule, JobsModule],
-  providers: [TasksService],
-  controllers: [TasksController],
+  imports: [JobsModule, AgentModule, DockerModule],
+  controllers: [TasksController, UploadController, DownloadController, PublishGithubController],
+  providers: [TasksService, PrismaClient],
+  exports: [TasksService],
 })
 export class TasksModule {}

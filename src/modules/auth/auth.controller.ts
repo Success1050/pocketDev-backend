@@ -1,15 +1,19 @@
 import { Controller, Get, Post, Body, HttpException, HttpStatus, Param, Query, Res } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import type { Response } from 'express';
 import { AuthService } from './auth.service';
 
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) { }
+  constructor(
+    private readonly authService: AuthService,
+    private readonly configService: ConfigService,
+  ) { }
 
   @Get('github/login')
   async githubLogin(@Query('platform') platform: string, @Res() res: Response) {
-    const clientId = process.env.GITHUB_CLIENT_ID;
-    const redirectUri = process.env.GITHUB_CALLBACK_URL;
+    const clientId = this.configService.get<string>('GITHUB_CLIENT_ID');
+    const redirectUri = this.configService.get<string>('GITHUB_CALLBACK_URL');
 
     if (!clientId || !redirectUri) {
       throw new HttpException('GitHub configuration missing', HttpStatus.INTERNAL_SERVER_ERROR);
@@ -39,7 +43,8 @@ export class AuthController {
       const { user, token } = await this.authService.githubLogin(code);
 
       if (state === 'web') {
-        const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3001';
+        // const frontendUrl = this.configService.get<string>('FRONTEND_URL') || 'http://localhost:3001';
+        const frontendUrl = 'http://localhost:3001';
         const webUrl = `${frontendUrl}/auth/github?token=${token}&userId=${user.id}`;
         return res.redirect(webUrl);
       }

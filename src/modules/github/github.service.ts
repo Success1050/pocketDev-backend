@@ -45,6 +45,7 @@ export class GithubService {
           sort: 'updated',
           page,
           per_page: perPage,
+          affiliation: 'owner,collaborator,organization_member'
         },
       });
 
@@ -141,5 +142,40 @@ export class GithubService {
         statusCode,
       );
     }
+  }
+
+  async getProjectEnv(userId: string, owner: string, repo: string) {
+    const env = await this.prisma.projectEnvironment.findUnique({
+      where: {
+        userId_repoOwner_repoName: {
+          userId,
+          repoOwner: owner,
+          repoName: repo,
+        },
+      },
+    });
+    return env || { envContent: '' };
+  }
+
+  async saveProjectEnv(userId: string, owner: string, repo: string, envContent: string) {
+    const env = await this.prisma.projectEnvironment.upsert({
+      where: {
+        userId_repoOwner_repoName: {
+          userId,
+          repoOwner: owner,
+          repoName: repo,
+        },
+      },
+      update: {
+        envContent,
+      },
+      create: {
+        userId,
+        repoOwner: owner,
+        repoName: repo,
+        envContent,
+      },
+    });
+    return env;
   }
 }

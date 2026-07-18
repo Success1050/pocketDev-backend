@@ -40,6 +40,31 @@ export class TasksController {
     return this.tasksService.provideFeedback(id, body.feedback);
   }
 
+  @Post(':id/cancel')
+  async cancelTask(@Param('id') id: string) {
+    return this.tasksService.cancelTask(id);
+  }
+
+  @Post(':id/commit')
+  async commitTask(@Param('id') id: string) {
+    return this.tasksService.commitTask(id);
+  }
+
+  @Post(':id/discard')
+  async discardTask(@Param('id') id: string) {
+    return this.tasksService.discardTask(id);
+  }
+
+  @Post(':id/refine')
+  async refineTask(@Param('id') id: string, @Body() body: { instruction: string; attachments?: string[] }) {
+    return this.tasksService.refineTask(id, body.instruction, body.attachments);
+  }
+
+  @Post(':id/merge')
+  async mergeTask(@Param('id') id: string, @Body() body: { targetBranch: string }) {
+    return this.tasksService.mergeTask(id, body.targetBranch);
+  }
+
   @Get(':id')
   async getOne(@Param('id') id: string) {
     return this.tasksService.getTask(id);

@@ -1,22 +1,25 @@
 import { Injectable, UnauthorizedException, HttpException, HttpStatus } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../core/prisma/prisma.service';
 import axios from 'axios';
 import * as jose from 'jose';
 
 @Injectable()
 export class AuthService {
-  constructor(private prisma: PrismaService) { }
+  constructor(
+    private prisma: PrismaService,
+    private configService: ConfigService,
+  ) { }
 
   async githubLogin(code: string) {
     try {
-      // 1. Exchange code for access token using GitHub App credentials
       const tokenResponse = await axios.post(
         'https://github.com/login/oauth/access_token',
         {
-          client_id: process.env.GITHUB_CLIENT_ID,
-          client_secret: process.env.GITHUB_CLIENT_SECRET,
+          client_id: this.configService.get<string>('GITHUB_CLIENT_ID'),
+          client_secret: this.configService.get<string>('GITHUB_CLIENT_SECRET'),
           code,
-          redirect_uri: process.env.GITHUB_CALLBACK_URL,
+          redirect_uri: this.configService.get<string>('GITHUB_CALLBACK_URL'),
         },
         {
           headers: {
@@ -60,7 +63,7 @@ export class AuthService {
       });
 
       // 4. Generate internal JWT using jose
-      const secret = new TextEncoder().encode(process.env.JWT_SECRET || 'super-secret-default');
+      const secret = new TextEncoder().encode(this.configService.get<string>('JWT_SECRET') || 'super-secret-default');
       const alg = 'HS256';
 
       const jwt = await new jose.SignJWT({ sub: user.id, username: user.username })

@@ -40,4 +40,22 @@ export class GithubController {
     console.log(`[GithubSync] Initiated ${body.action} for ${body.owner}/${body.repo}`);
     return { status: 'success', message: `Successfully executed ${body.action} for ${body.repo}` };
   }
+  @Get('repos/:userId/:owner/:repo/env')
+  async getProjectEnv(
+    @Param('userId') userId: string,
+    @Param('owner') owner: string,
+    @Param('repo') repo: string,
+  ) {
+    return this.githubService.getProjectEnv(userId, owner, repo);
+  }
+
+  @Post('repos/:userId/:owner/:repo/env')
+  async saveProjectEnv(
+    @Param('userId') userId: string,
+    @Param('owner') owner: string,
+    @Param('repo') repo: string,
+    @Body() body: { envContent: string },
+  ) {
+    return this.githubService.saveProjectEnv(userId, owner, repo, body.envContent);
+  }
 }

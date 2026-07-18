@@ -14,7 +14,6 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-
 model User {
   id        String   @id @default(uuid())
   githubId  String   @unique
@@ -29,6 +28,7 @@ model User {
   subscriptionId String? // RevenueCat original_app_user_id or subscriber id
   tasks          Task[]
   notifications  Notification[]
+  projectEnvs    ProjectEnvironment[]
 }
 
 model Task {
@@ -43,9 +43,17 @@ model Task {
   repoUrl     String?
   branchName  String?
   baseBranch  String?
+  isLocal     Boolean   @default(false)
   plan        String?
   diff        String?
+  attachments String?
   projectId   String?
+  secondaryRepoName   String?
+  secondaryRepoOwner  String?
+  secondaryRepoUrl    String?
+  secondaryBranchName String?
+  secondaryBaseBranch String?
+  secondaryProjectId  String?
   llmProvider String?
   llmModel    String?
   previewUrl  String?
@@ -94,4 +102,17 @@ model BackgroundJob {
   taskId      String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+}
+
+model ProjectEnvironment {
+  id         String   @id @default(uuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id])
+  repoOwner  String
+  repoName   String
+  envContent String   @db.Text
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([userId, repoOwner, repoName])
 }

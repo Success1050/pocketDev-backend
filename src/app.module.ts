@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import { BullModule } from '@nestjs/bullmq';
 import { ScheduleModule } from '@nestjs/schedule';
 import { AppController } from './app.controller';
@@ -16,14 +17,24 @@ import { RevenueCatModule } from './modules/revenuecat/revenuecat.module';
 
 @Module({
   imports: [
+    ConfigModule.forRoot({ isGlobal: true }),
     // Global BullMQ configuration (Redis-backed job queue)
-    BullModule.forRoot({
-      connection: {
-        host: process.env.REDIS_HOST || 'localhost',
-        port: parseInt(process.env.REDIS_PORT || '6379', 10),
-        password: process.env.REDIS_PASSWORD || undefined,
-        maxRetriesPerRequest: null,
-        ...(process.env.REDIS_HOST && process.env.REDIS_HOST !== 'localhost' ? { tls: {} } : {}),
+    BullModule.forRootAsync({
+      imports: [ConfigModule],
+      inject: [ConfigService],
+      useFactory: async (configService: ConfigService) => {
+        const host = configService.get<string>('REDIS_HOST') || 'localhost';
+        const port = parseInt(configService.get<string>('REDIS_PORT') || '6379', 10);
+        const password = configService.get<string>('REDIS_PASSWORD') || undefined;
+        return {
+          connection: {
+            host,
+            port,
+            password,
+            maxRetriesPerRequest: null,
+            ...(host && host !== 'localhost' ? { tls: {} } : {}),
+          },
+        };
       },
     }),
     ScheduleModule.forRoot(),

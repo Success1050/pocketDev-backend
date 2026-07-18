@@ -1,26 +1,38 @@
 import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { DockerService } from '../docker/docker.service';
 import { PrismaService } from '../../core/prisma/prisma.service';
-import { generateText } from 'ai';
+import { generateText, streamText } from 'ai';
 import { createAnthropic } from '@ai-sdk/anthropic';
 @Injectable()
 export class AgentService {
+  private activeContainers: Map<string, string> = new Map();
+
   constructor(
     private readonly dockerService: DockerService,
     private readonly prisma: PrismaService,
+    private readonly configService: ConfigService,
   ) { }
 
   private getModel(providerName?: string, modelName?: string) {
     const model = modelName || 'claude-3-5-sonnet-20240620';
-    const anthropic = createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    const anthropic = createAnthropic({ apiKey: this.configService.get<string>('ANTHROPIC_API_KEY') });
     return anthropic(model);
+  }
+
+  getActiveContainers() {
+    return this.activeContainers;
+  }
+
+  getActiveContainerId(taskId: string) {
+    return this.activeContainers.get(taskId);
   }
 
   async getAvailableModels() {
     try {
       const response = await fetch('https://api.anthropic.com/v1/models', {
         headers: {
-          'x-api-key': process.env.ANTHROPIC_API_KEY || '',
+          'x-api-key': this.configService.get<string>('ANTHROPIC_API_KEY') || '',
           'anthropic-version': '2023-06-01'
         }
       });
@@ -62,17 +74,84 @@ export class AgentService {
   /**
    * Append a structured log entry to the TaskLog table.
    */
-  private async addLog(taskId: string, type: string, message: string) {
+  async addLog(taskId: string, type: 'info' | 'error' | 'success' | 'warning' | 'process', message: string) {
     await this.prisma.taskLog.create({
       data: { taskId, type, message },
     });
     console.log(`[TaskLog:${type}] ${message}`);
   }
 
+  /**
+   * Dynamically detect project setup strategy using an LLM.
+   */
+  private async getProjectSetupStrategy(containerId: string, targetDir: string, port: number) {
+    try {
+      const lsRes = await this.dockerService.executeCommand(containerId, `cd ${targetDir} && ls -laR --max-depth=2`);
+      let files = lsRes.stdout;
+      if (files.length > 2000) files = files.substring(0, 2000);
+      
+      let packageJson = '';
+      const pkgCheck = await this.dockerService.executeCommand(containerId, `cd ${targetDir} && test -f package.json && cat package.json || echo ""`);
+      if (pkgCheck.stdout && pkgCheck.stdout.length > 10) {
+        packageJson = pkgCheck.stdout.substring(0, 1000);
+      }
+
+      const { text } = await generateText({
+        model: this.getModel('anthropic', 'claude-3-5-sonnet-20240620'), // Fast/Smart model
+        prompt: `You are analyzing a codebase to determine how to run it.
+        File tree (max depth 2):
+        ${files}
+        
+        Package.json (if any):
+        ${packageJson}
+        
+        Output a valid JSON object with exactly three keys:
+        - "installCommand": The bash command to install dependencies (e.g. "npm install", "cargo build", "composer install", "pip install -r requirements.txt", or "" if none needed).
+        - "devCommand": The bash command to start the local dev server ON PORT ${port} (e.g. "npm run dev -- --port ${port} --host 0.0.0.0", "php -S 0.0.0.0:${port}", "cargo run", "python3 -m http.server ${port} --bind 0.0.0.0").
+        - "projectType": A broad categorization (e.g. "node", "python", "php", "static", "rust", "unknown").
+        
+        Output strictly ONLY the JSON object. Do not wrap in markdown block.`,
+      });
+
+      try {
+        const parsed = JSON.parse(text.trim());
+        return {
+          installCommand: parsed.installCommand || '',
+          devCommand: parsed.devCommand || `python3 -m http.server ${port} --bind 0.0.0.0`,
+          projectType: parsed.projectType || 'unknown'
+        };
+      } catch (e) {
+        console.warn(`Failed to parse LLM strategy JSON: ${text}`);
+      }
+    } catch (e) {
+      console.error(`Failed to get dynamic strategy: ${e.message}`);
+    }
+    
+    // Fallback
+    return {
+      installCommand: 'npm install',
+      devCommand: 'npm run dev',
+      projectType: 'node'
+    };
+  };
+
   async processTask(taskId: string, payload: any) {
     let containerId: string | null = null;
+    let taskSuccess = false;
     try {
       const task = await this.prisma.task.findUnique({ where: { id: taskId }, include: { user: true } });
+      
+      if (!task) {
+        console.error(`[Agent] Task ${taskId} not found.`);
+        return;
+      }
+
+      // Prevent automatic restart of cancelled tasks
+      if (task.status === 'cancelled') {
+        console.log(`[Agent] Task ${taskId} is cancelled. Aborting.`);
+        return;
+      }
+
       const githubToken = task?.user?.accessToken;
 
       await this.addLog(taskId, 'info', `Task started — ${payload.llm?.provider} (${payload.llm?.model})`);
@@ -83,49 +162,131 @@ export class AgentService {
 
       // Step 1: Spin up Workspace
       await this.addLog(taskId, 'info', `Spinning up isolated Docker workspace...`);
-      const workspace = await this.dockerService.spinUpWorkspace(taskId, payload.repo?.url);
+      
+      const hasSecondaryRepo = !!payload.secondaryRepo?.url;
+      const primaryTargetDir = hasSecondaryRepo ? payload.repo?.name || 'primary-repo' : '.';
+      
+      // Assign random host ports for preview (9100-9999 range to avoid conflicts)
+      const primaryHostPort = 9100 + Math.floor(Math.random() * 900);
+      const secondaryHostPort = primaryHostPort + 1;
+      const portMappings = [
+        { containerPort: 3000, hostPort: primaryHostPort },
+      ];
+      if (hasSecondaryRepo) {
+        portMappings.push({ containerPort: 4000, hostPort: secondaryHostPort });
+      }
+      
+      const workspace = await this.dockerService.spinUpWorkspace(taskId, payload.repo?.url, portMappings);
       containerId = workspace.containerId;
+      this.activeContainers.set(taskId, containerId);
       await this.addLog(taskId, 'success', `Workspace ready — container: ${containerId}`);
 
       // Step 2: Clone Repo
-      await this.addLog(taskId, 'info', `Cloning repository: ${payload.repo?.name} (branch: ${payload.branch?.baseBranch || 'main'})`);
-      await this.dockerService.cloneRepo(containerId!, payload.repo?.url, payload.branch?.baseBranch || 'main', githubToken || undefined);
-      await this.addLog(taskId, 'success', 'Repository cloned successfully');
+      
+      await this.addLog(taskId, 'info', `Cloning repositories...`);
+      // Fetch Environment Variables
+      let primaryEnvContent = '';
+      if (payload.repo?.owner && payload.repo?.name) {
+        const primaryEnv = await this.prisma.projectEnvironment.findUnique({
+          where: { userId_repoOwner_repoName: { userId: task.userId, repoOwner: payload.repo.owner, repoName: payload.repo.name } }
+        });
+        if (primaryEnv) primaryEnvContent = primaryEnv.envContent;
+      }
+
+      let secondaryEnvContent = '';
+      if (payload.secondaryRepo?.owner && payload.secondaryRepo?.name) {
+        const secondaryEnv = await this.prisma.projectEnvironment.findUnique({
+          where: { userId_repoOwner_repoName: { userId: task.userId, repoOwner: payload.secondaryRepo.owner, repoName: payload.secondaryRepo.name } }
+        });
+        if (secondaryEnv) secondaryEnvContent = secondaryEnv.envContent;
+      }
+
+      const clonePromises = [
+        this.dockerService.cloneRepo(containerId!, payload.repo?.url, payload.branch?.baseBranch || 'main', githubToken || undefined, primaryTargetDir, primaryEnvContent, task.isLocal)
+      ];
+      
+      if (hasSecondaryRepo) {
+        const secondaryTargetDir = payload.secondaryRepo?.name || 'secondary-repo';
+        clonePromises.push(
+          this.dockerService.cloneRepo(containerId!, payload.secondaryRepo?.url, payload.secondaryBranch?.baseBranch || 'main', githubToken || undefined, secondaryTargetDir, secondaryEnvContent, task.isLocal)
+        );
+      }
+
+      await Promise.all(clonePromises);
+      await this.addLog(taskId, 'success', 'Repository(ies) cloned successfully');
+      
+      // Dynamically detect project setup strategy via LLM
+      const primaryStrategy = await this.getProjectSetupStrategy(containerId!, primaryTargetDir, 3000);
+      await this.addLog(taskId, 'info', `Primary setup strategy determined via AI.`);
+
+      let attachmentsContext = '';
+      if (payload.attachments && payload.attachments.length > 0) {
+        const internalUrls = payload.attachments.map(a => a.replace('localhost', 'host.docker.internal').replace('127.0.0.1', 'host.docker.internal'));
+        attachmentsContext = `\n\nATTACHMENTS: The user has uploaded the following files. They are hosted at these internal URLs:\n${internalUrls.map(a => `- ${a}`).join('\n')}\nCRITICAL: If these are images to be used in the project, you MUST use wget or curl to download them into the project's public/assets directory, and then reference the local file paths in your code. DO NOT hotlink these URLs directly in the code because they are internal network URLs that will break on production!`;
+      }
+
+      const workspaceContext = hasSecondaryRepo 
+        ? `\n\nWORKSPACE CONTEXT: You are working in a workspace with TWO repositories.
+          Primary Repo: /workspace/${primaryTargetDir}
+          Secondary Repo: /workspace/${payload.secondaryRepo?.name || 'secondary-repo'}
+          Make sure to cd into the correct directory before making changes or running commands!
+          CRITICAL: You MUST evaluate the user's instructions against BOTH repositories. Do not stop execution until you have made the necessary changes in BOTH the primary and secondary repositories if the task requires it. Do not ignore either repository!`
+        : '';
+
+      const projectType = primaryStrategy.projectType;
+      const projectTypeContext = `Project Type: ${projectType}`;
 
       // Step 2.5: Planning
       await this.addLog(taskId, 'process', `Generating Implementation Plan...`);
       const aiModel = this.getModel(payload.llm?.provider, payload.llm?.model);
-      const { text: planText } = await generateText({
-        model: aiModel,
-        prompt: `You are an AI developer agent. The user wants you to: ${payload.instruction}.
-        Project language/framework: ${payload.meta?.language || 'Unknown'}.
+
+      const generateAndStreamPlan = async (promptText: string) => {
+        let planText = '';
+        let lastUpdateTime = Date.now();
+        const { textStream } = await streamText({
+          model: aiModel,
+          prompt: promptText,
+        });
+
+        for await (const textPart of textStream) {
+          planText += textPart;
+          if (Date.now() - lastUpdateTime > 500) {
+            await this.prisma.task.update({
+              where: { id: taskId },
+              data: { plan: planText, status: 'awaiting-approval' },
+            });
+            lastUpdateTime = Date.now();
+          }
+        }
+        
+        await this.prisma.task.update({
+          where: { id: taskId },
+          data: { plan: planText, status: 'awaiting-approval' },
+        });
+      };
+
+      await generateAndStreamPlan(`You are an AI developer agent. The user wants you to: ${payload.instruction}.
+        Project language/framework: ${payload.meta?.language || 'Unknown'}.${workspaceContext}${attachmentsContext}
         Based on this, output a step-by-step implementation plan. 
-        Format it nicely in Markdown. Do not include introductory text, just the plan.`,
-      });
-      await this.prisma.task.update({
-        where: { id: taskId },
-        data: { plan: planText, status: 'awaiting-approval' },
-      });
+        Format it nicely in Markdown. Do not include introductory text, just the plan.`);
+      
       await this.addLog(taskId, 'info', `Waiting for user to approve the plan...`);
 
       let planApproved = false;
       while (!planApproved) {
         await new Promise(r => setTimeout(r, 3000));
         const currentTask = await this.prisma.task.findUnique({ where: { id: taskId } });
+        if (currentTask?.status === 'cancelled') {
+          await this.addLog(taskId, 'error', 'Task was cancelled by user');
+          return;
+        }
         if (currentTask?.status === 'in-progress' || currentTask?.status === 'plan-approved') {
           planApproved = true;
           await this.prisma.task.update({ where: { id: taskId }, data: { status: 'in-progress' } });
         } else if (currentTask?.status === 'plan-rejected') {
           await this.addLog(taskId, 'process', `Plan rejected. Re-generating based on feedback...`);
-          const { text: newPlan } = await generateText({
-            model: aiModel,
-            prompt: `You are an AI developer agent. The user wants you to: ${currentTask?.description}.
-            Output a step-by-step implementation plan. Do not include introductory text.`,
-          });
-          await this.prisma.task.update({
-            where: { id: taskId },
-            data: { plan: newPlan, status: 'awaiting-approval' },
-          });
+          await generateAndStreamPlan(`You are an AI developer agent. The user wants you to: ${currentTask?.description}.
+            Output a step-by-step implementation plan. Do not include introductory text.`);
           await this.addLog(taskId, 'info', `Waiting for user to approve the revised plan...`);
         }
       }
@@ -141,31 +302,46 @@ export class AgentService {
       let history = '';
 
       while (!isTaskComplete && loopCount < 15) {
+        const currentTaskLoop = await this.prisma.task.findUnique({ where: { id: taskId } });
+        if (currentTaskLoop?.status === 'cancelled') {
+          await this.addLog(taskId, 'error', 'Task was cancelled by user');
+          return;
+        }
+
         loopCount++;
         await this.addLog(taskId, 'process', `AI thinking... (iteration ${loopCount})`);
 
         try {
           const { text } = await generateText({
             model: aiModel,
-            prompt: `You are an AI developer agent. The user wants you to: ${payload.instruction}.
+            prompt: `You are an elite, Senior 10x Developer AI. The user wants you to: ${payload.instruction}.
             Project language/framework: ${payload.meta?.language || 'Unknown (inspect first)'}.
+            ${projectTypeContext}
             
-            CRITICAL RULES:
-            1. BEFORE writing any code, you MUST explore the codebase (using 'ls', 'cat package.json', etc.) to understand the existing architecture, framework (Next.js, React, etc.), and file structure.
-            2. NEVER write plain HTML files (.html) if the project uses a frontend framework like Next.js or React. You MUST create the appropriate framework components (.tsx, .jsx, etc.) and integrate them into the existing routing and layout.
-            3. Modify existing files (like navigation bars) to link to your new pages.
-            4. ALWAYS verify your code before marking the task as DONE based on the framework/language. For Next.js/NestJS/React run 'npm run build' to catch errors. For pure Node.js run 'npm run lint'. For Rust run 'cargo check'. Fix any errors you find before concluding.
-            5. Inspect 'package.json' for other essential scripts (e.g., database migrations, seeding, formatting) and intelligently run those commands if the task requires them.
+            CONSTITUTION & CRITICAL RULES:
+            1. BEFORE writing any code, you MUST explore the codebase (using 'ls', 'cat', 'find', etc.) to understand the existing architecture, file structure, and what technology stack is being used.
+            2. If the project is a Node.js project with a frontend framework (Next.js, React, etc.), create the appropriate framework components (.tsx, .jsx, etc.) and integrate them into the existing routing and layout. Do NOT create standalone .html files.
+            3. If the project is a STATIC HTML/CSS/JS site (no package.json), edit the .html, .css, and .js files directly. Do NOT create package.json or try to use npm.
+            4. NEVER use placeholder code (e.g. "// insert logic here"). Always write complete, production-ready code.
+            5. ALWAYS verify your code before marking the task as DONE. For Node.js projects, run 'npm run build'. For static HTML, verify file paths are correct. For Python, run the relevant checks.
+            6. If there is a package.json, inspect it for essential scripts (migrations, seeding, etc.) and intelligently run those commands if the task requires them.${workspaceContext}
             
             Past actions and outputs:
             ${history}
             
-            We are in iteration ${loopCount} (Max 15). Output a SINGLE bash command to execute in the workspace to make progress on this task.
-            Do not include markdown formatting or backticks, just the raw bash command.
-            If you want to create a file, use echo or cat. If you think the task is done, output: echo "DONE"`,
+            We are in iteration ${loopCount} (Max 15). 
+            CHAIN OF THOUGHT:
+            First, briefly think step-by-step in English about what you are going to do and why.
+            Then, provide a SINGLE bash command to execute in the workspace to make progress on this task.
+            You MUST place your bash command inside a \`\`\`bash code block. 
+            If you think the task is completely finished, output: \`\`\`bash\necho "DONE"\n\`\`\``,
           });
 
-          const aiChosenCommand = text.trim();
+          // Extract bash command from code block, or fallback to full text
+          const codeBlockMatch = text.match(/\`\`\`(?:bash|sh)?\n([\s\S]*?)\`\`\`/);
+          const aiChosenCommand = (codeBlockMatch ? codeBlockMatch[1] : text).trim();
+          
+          await this.addLog(taskId, 'info', `AI Reasoning: ${text.replace(/\`\`\`(?:bash|sh)?\n[\s\S]*?\`\`\`/, '').trim() || '(No reasoning provided)'}`);
           await this.addLog(taskId, 'info', `> ${aiChosenCommand}`);
 
           const result = await this.dockerService.executeCommand(containerId!, aiChosenCommand);
@@ -185,56 +361,458 @@ export class AgentService {
       }
 
       // Step 4: Validate
-      await this.addLog(taskId, 'process', 'Validating changes — running npm install...');
-      await this.dockerService.executeCommand(containerId!, 'npm install');
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      await this.addLog(taskId, 'success', '✓ Dependencies installed successfully');
+      let currentTaskFinalCheck = await this.prisma.task.findUnique({ where: { id: taskId } });
+      if (currentTaskFinalCheck?.status === 'cancelled') return;
 
-      // Live Preview
-      await this.addLog(taskId, 'process', 'Spinning up live preview (localtunnel)...');
-      await this.dockerService.executeCommand(containerId!, 'npm run dev & npx --yes localtunnel --port 3000 > lt.log &');
-      await new Promise(r => setTimeout(r, 6000));
-      const ltResult = await this.dockerService.executeCommand(containerId!, 'cat lt.log');
-      const urlMatch = ltResult.stdout.match(/your url is: (https:\/\/[^\s]+)/);
-      if (urlMatch) {
-        await this.prisma.task.update({ where: { id: taskId }, data: { previewUrl: urlMatch[1] } });
-        await this.addLog(taskId, 'info', `Live preview available at: ${urlMatch[1]}`);
+      // Adaptive dependency installation based on AI strategy (PRIMARY)
+      if (primaryStrategy.installCommand) {
+        await this.addLog(taskId, 'process', `Installing primary dependencies via: ${primaryStrategy.installCommand}`);
+        await this.dockerService.executeCommand(containerId!, `cd ${primaryTargetDir} && ${primaryStrategy.installCommand}`, 300000);
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        await this.addLog(taskId, 'success', '✓ Primary dependencies installed');
+      } else {
+        await this.addLog(taskId, 'info', `Primary repo — skipping dependency installation (not required)`);
       }
+
+      let secondaryStrategy = { installCommand: '', devCommand: '' };
+
+      // Adaptive dependency installation for SECONDARY repo
+      if (hasSecondaryRepo) {
+        const secondaryDir = payload.secondaryRepo?.name || 'secondary-repo';
+        secondaryStrategy = await this.getProjectSetupStrategy(containerId!, secondaryDir, 4000);
+        await this.addLog(taskId, 'info', `Secondary setup strategy determined via AI.`);
+        
+        if (secondaryStrategy.installCommand) {
+          await this.addLog(taskId, 'process', `Installing secondary dependencies via: ${secondaryStrategy.installCommand}`);
+          await this.dockerService.executeCommand(containerId!, `cd ${secondaryDir} && ${secondaryStrategy.installCommand}`, 300000);
+          await this.addLog(taskId, 'success', '✓ Secondary dependencies installed');
+        } else {
+          await this.addLog(taskId, 'info', `Secondary repo — skipping dependency installation (not required)`);
+        }
+      }
+
+      currentTaskFinalCheck = await this.prisma.task.findUnique({ where: { id: taskId } });
+      if (currentTaskFinalCheck?.status === 'cancelled') return;
+
+      // Live Preview (Docker Port Mapping — no tunneling needed!)
+      await this.addLog(taskId, 'process', 'Spinning up live preview...');
+      
+      let secondaryUrlStr = '';
+      let primaryUrlStr = `http://localhost:${primaryHostPort}`;
+      const secondaryDir = payload.secondaryRepo?.name || 'secondary-repo';
+      
+      if (hasSecondaryRepo) {
+        secondaryUrlStr = `http://localhost:${secondaryHostPort}`;
+        
+        // Bi-directional Injection: Cross-wire both repos
+        await this.dockerService.executeCommand(containerId!, `cd ${primaryTargetDir} && echo -e "NEXT_PUBLIC_API_URL=${secondaryUrlStr}\\nREACT_APP_API_URL=${secondaryUrlStr}\\nVITE_API_URL=${secondaryUrlStr}\\nAPI_URL=${secondaryUrlStr}" >> .env.local`);
+        await this.dockerService.executeCommand(containerId!, `cd ${secondaryDir} && echo -e "NEXT_PUBLIC_API_URL=${primaryUrlStr}\\nREACT_APP_API_URL=${primaryUrlStr}\\nVITE_API_URL=${primaryUrlStr}\\nAPI_URL=${primaryUrlStr}" >> .env.local`);
+        
+        // Start secondary repo dev server
+        await this.dockerService.executeCommand(containerId!, `cd ${secondaryDir} && nohup ${secondaryStrategy.devCommand} > dev.log 2>&1 &`);
+      }
+
+      // Start primary repo dev server
+      await this.dockerService.executeCommand(containerId!, `cd ${primaryTargetDir} && nohup ${primaryStrategy.devCommand} > dev.log 2>&1 &`);
+      
+      // Wait for dev server to boot
+      await new Promise(r => setTimeout(r, 5000));
+      
+      await this.prisma.task.update({ where: { id: taskId }, data: { previewUrl: primaryUrlStr } });
+      const logMsg = hasSecondaryRepo ? `Live preview available at: ${primaryUrlStr} (Secondary: ${secondaryUrlStr})` : `Live preview available at: ${primaryUrlStr}`;
+      await this.addLog(taskId, 'info', logMsg);
+
+      currentTaskFinalCheck = await this.prisma.task.findUnique({ where: { id: taskId } });
+      if (currentTaskFinalCheck?.status === 'cancelled') return;
 
       // Step 4.5: Diff
       await this.addLog(taskId, 'process', 'Generating code diff...');
-      const diffResult = await this.dockerService.executeCommand(containerId!, 'git diff');
+      // Use git add -A first then git diff --cached to capture ALL changes (new files, staged, modified)
+      await this.dockerService.executeCommand(containerId!, `cd ${primaryTargetDir} && git add -A`);
+      const diffResult = await this.dockerService.executeCommand(containerId!, `cd ${primaryTargetDir} && git diff --cached`);
       await this.prisma.task.update({ where: { id: taskId }, data: { diff: diffResult.stdout } });
 
-      await this.addLog(taskId, 'process', 'Running build...');
-      await this.dockerService.executeCommand(containerId!, 'npm run build');
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      await this.addLog(taskId, 'success', '✓ Build completed successfully');
+      // Adaptive Build Retry: re-enter AI loop on build failure, up to 2 retries
+      // Adaptive build step based on project type
+      if (projectType === 'node') {
+        let buildRetryCount = 0;
+        const maxBuildRetries = 2;
+        let buildSucceeded = false;
 
-      // Step 5: Git Sync
-      const targetBranch = payload.branch?.name || `ai-task-${taskId}`;
-      await this.addLog(taskId, 'info', `Pushing changes to branch: ${targetBranch}`);
-      await this.dockerService.commitAndPush(containerId!, targetBranch, `AI: ${payload.instruction}`, githubToken || undefined, payload.repo?.url);
-      await this.addLog(taskId, 'success', `✓ Changes pushed to ${targetBranch}`);
+        while (!buildSucceeded && buildRetryCount <= maxBuildRetries) {
+          await this.addLog(taskId, 'process', buildRetryCount === 0 ? 'Running build...' : `Running build (retry ${buildRetryCount}/${maxBuildRetries})...`);
+          const buildResult = await this.dockerService.executeCommand(containerId!, `cd ${primaryTargetDir} && npm run build`);
+          await new Promise(resolve => setTimeout(resolve, 1000));
 
-      // Step 6: Generate preview URL (using repo homepage if available)
-      const previewUrl = payload.repo?.homepage || `https://${payload.repo?.name}-preview.vercel.app`;
+          const buildFailed = buildResult.stderr && (
+            buildResult.stderr.toLowerCase().includes('error') ||
+            buildResult.stderr.includes('ERR')
+          );
+
+          if (!buildFailed) {
+            await this.addLog(taskId, 'success', '✓ Build completed successfully');
+            buildSucceeded = true;
+          } else if (buildRetryCount < maxBuildRetries) {
+            buildRetryCount++;
+            const buildError = buildResult.stderr.substring(0, 1500);
+            await this.addLog(taskId, 'error', `Build failed. Re-entering AI loop to fix (retry ${buildRetryCount}/${maxBuildRetries})...`);
+            await this.addLog(taskId, 'info', `Build error: ${buildError.substring(0, 500)}${buildError.length > 500 ? '...' : ''}`);
+
+            // Re-enter AI loop with build error context (up to 5 iterations)
+            let fixLoopCount = 0;
+            let fixComplete = false;
+            while (!fixComplete && fixLoopCount < 5) {
+              fixLoopCount++;
+              await this.addLog(taskId, 'process', `AI fixing build error... (fix iteration ${fixLoopCount})`);
+              try {
+                const { text } = await generateText({
+                  model: aiModel,
+                  prompt: `You are an AI developer agent. The project failed to build with the following error:\n\n${buildError}\n\nThe user's original task was: ${payload.instruction}.\nProject language/framework: ${payload.meta?.language || 'Unknown'}.\n\nPast actions and outputs:\n${history}\n\nFix iteration ${fixLoopCount} of 5. Output a SINGLE bash command to fix the build error.\nDo not include markdown formatting or backticks, just the raw bash command.\nIf you believe the fix is complete, output: echo \"DONE\"`,
+                });
+
+                const fixCommand = text.trim();
+                await this.addLog(taskId, 'info', `> ${fixCommand}`);
+
+                if (fixCommand.includes('DONE')) {
+                  fixComplete = true;
+                  break;
+                }
+
+                const fixResult = await this.dockerService.executeCommand(containerId!, fixCommand);
+                await this.addLog(taskId, 'info', `Tool output: ${fixResult.stdout.substring(0, 500)}${fixResult.stdout.length > 500 ? '...' : ''}`);
+                history += `Command: ${fixCommand}\nOutput: ${fixResult.stdout || fixResult.stderr}\n\n`;
+              } catch (error) {
+                await this.addLog(taskId, 'error', `AI fix generation failed: ${error.message}`);
+                break;
+              }
+            }
+          } else {
+            throw new Error(`Build failed after ${maxBuildRetries} retries. Aborting task to prevent pushing broken code to the repository.`);
+          }
+        }
+      } else if (projectType === 'static') {
+        await this.addLog(taskId, 'success', '✓ Static HTML project — no build step needed');
+      } else if (projectType === 'python') {
+        await this.addLog(taskId, 'success', '✓ Python project — no build step needed');
+      } else {
+        await this.addLog(taskId, 'info', 'Unknown project type — skipping build step');
+      }
+
+      // Step 5: Await User Review
       await this.prisma.task.update({
         where: { id: taskId },
-        data: { status: 'completed', logs: 'Build successful', previewUrl },
+        data: { status: 'awaiting-review', logs: 'Build successful, waiting for review' },
       });
-      await this.addLog(taskId, 'success', `🎉 Task completed! Preview: ${previewUrl}`);
+      await this.addLog(taskId, 'success', `🎉 Changes are ready for review! Live preview is active.`);
+      taskSuccess = true;
 
     } catch (error) {
       console.error(`[Agent] Task failed:`, error);
       await this.addLog(taskId, 'error', `Task failed: ${error.message}`);
       await this.prisma.task.update({ where: { id: taskId }, data: { status: 'failed', logs: error.message } });
     } finally {
-      if (containerId) {
-        await this.addLog(taskId, 'info', 'Cleaning up workspace...');
+      // Do NOT delete from activeContainers here, unless it failed
+      if (!taskSuccess && containerId) {
+        this.activeContainers.delete(taskId);
+        await this.addLog(taskId, 'info', 'Cleaning up workspace due to failure...');
         await this.dockerService.cleanupWorkspace(containerId);
         await this.addLog(taskId, 'info', 'Workspace destroyed');
+      } else if (taskSuccess && containerId) {
+        await this.addLog(taskId, 'info', 'Keeping workspace alive for Live Preview (auto-destructs in 30 minutes)...');
+        // Let it auto-destruct eventually if abandoned
+        setTimeout(async () => {
+          if (this.activeContainers.has(taskId)) {
+             this.activeContainers.delete(taskId);
+             await this.dockerService.cleanupWorkspace(containerId!).catch(console.error);
+             await this.prisma.task.update({
+               where: { id: taskId },
+               data: { status: 'cancelled' }
+             }).catch(console.error);
+             await this.addLog(taskId, 'warning', 'Workspace destroyed automatically after 30 minutes of inactivity.');
+          }
+        }, 30 * 60 * 1000);
       }
+    }
+  }
+
+  // --- NEW METHODS FOR INTERACTIVE EXECUTION ---
+  async commitAndPushTask(taskId: string) {
+    const containerId = this.activeContainers.get(taskId);
+    if (!containerId) {
+      await this.prisma.task.update({ where: { id: taskId }, data: { status: 'failed' } });
+      await this.addLog(taskId, 'error', 'Task container is no longer active or has expired. Cannot push changes.');
+      throw new Error('Task container is no longer active or expired.');
+    }
+
+    const task = await this.prisma.task.findUnique({ where: { id: taskId }, include: { user: true } });
+    if (!task) throw new Error('Task not found');
+    
+    try {
+      await this.prisma.task.update({ where: { id: taskId }, data: { status: 'pushing' } });
+      await this.addLog(taskId, 'process', 'Pushing approved changes to GitHub...');
+
+      const targetBranch = task.branchName || `ai-task-${taskId}`;
+      const primaryTargetDir = task.secondaryRepoUrl ? task.repoName || 'primary-repo' : '.';
+      
+      await this.dockerService.commitAndPush(containerId, targetBranch, `AI: ${task.description}`, task.user.accessToken || undefined, task.repoUrl || undefined, primaryTargetDir);
+      
+      if (task.secondaryRepoUrl) {
+        const secondaryTargetBranch = task.secondaryBranchName || `ai-task-${taskId}`;
+        const secondaryTargetDir = task.secondaryRepoName || 'secondary-repo';
+        await this.dockerService.commitAndPush(containerId, secondaryTargetBranch, `AI: ${task.description}`, task.user.accessToken || undefined, task.secondaryRepoUrl || undefined, secondaryTargetDir);
+      }
+
+      await this.addLog(taskId, 'success', `✓ Changes pushed successfully to ${targetBranch}`);
+      await this.prisma.task.update({ where: { id: taskId }, data: { status: 'completed' } });
+    } catch (e: any) {
+      await this.addLog(taskId, 'error', `Failed to push changes: ${e.message}`);
+      await this.prisma.task.update({ where: { id: taskId }, data: { status: 'failed' } });
+    } finally {
+      this.activeContainers.delete(taskId);
+      await this.dockerService.cleanupWorkspace(containerId);
+      await this.addLog(taskId, 'info', 'Workspace cleaned up after push.');
+    }
+  }
+
+  async discardTask(taskId: string) {
+    const containerId = this.activeContainers.get(taskId);
+    
+    await this.prisma.task.update({ where: { id: taskId }, data: { status: 'cancelled' } });
+    await this.addLog(taskId, 'warning', 'Task discarded by user. Cleaning up workspace...');
+    
+    if (containerId) {
+      this.activeContainers.delete(taskId);
+      await this.dockerService.cleanupWorkspace(containerId);
+    }
+  }
+
+  async refineTask(taskId: string, newInstruction: string, attachments?: string[]) {
+    const containerId = this.activeContainers.get(taskId);
+    if (!containerId) {
+      await this.prisma.task.update({ where: { id: taskId }, data: { status: 'failed' } });
+      await this.addLog(taskId, 'error', 'Task container is no longer active or has expired. Cannot refine.');
+      throw new Error('Task container is no longer active.');
+    }
+
+    const task = await this.prisma.task.findUnique({ where: { id: taskId }, include: { user: true } });
+    if (!task) throw new Error('Task not found');
+
+    await this.prisma.task.update({ where: { id: taskId }, data: { status: 'in-progress' } });
+    await this.addLog(taskId, 'process', `Executing refinement: ${newInstruction}`);
+
+    try {
+      const aiModel = this.getModel(task.llmProvider || undefined, task.llmModel || undefined);
+      const hasSecondaryRepo = !!task.secondaryRepoUrl;
+      const primaryTargetDir = hasSecondaryRepo ? task.repoName || 'primary-repo' : '.';
+      
+      const workspaceContext = hasSecondaryRepo 
+        ? `\n\nWORKSPACE CONTEXT: You are working in a workspace with TWO repositories.
+          Primary Repo: /workspace/${primaryTargetDir}
+          Secondary Repo: /workspace/${task.secondaryRepoName || 'secondary-repo'}
+          Make sure to cd into the correct directory before making changes or running commands!
+          CRITICAL: You MUST evaluate the user's instructions against BOTH repositories. Do not stop execution until you have made the necessary changes in BOTH the primary and secondary repositories if the task requires it. Do not ignore either repository!`
+        : '';
+        
+      let attachmentsContext = '';
+      if (attachments && attachments.length > 0) {
+        const internalUrls = attachments.map(a => a.replace('localhost', 'host.docker.internal').replace('127.0.0.1', 'host.docker.internal'));
+        attachmentsContext = `\n\nATTACHMENTS: The user has uploaded the following files for this refinement. They are hosted at these internal URLs:\n${internalUrls.map(a => `- ${a}`).join('\n')}\nCRITICAL: If these are images to be used in the project, you MUST use wget or curl to download them into the project's public/assets directory, and then reference the local file paths in your code. DO NOT hotlink these URLs directly in the code because they are internal network URLs that will break on production!`;
+      }
+        
+      let isTaskComplete = false;
+      let loopCount = 0;
+      let history = '';
+      
+      while (!isTaskComplete && loopCount < 10) {
+        loopCount++;
+        await this.addLog(taskId, 'process', `AI refining... (iteration ${loopCount})`);
+        
+        try {
+          const { text } = await generateText({
+            model: aiModel,
+            prompt: `You are an elite, Senior 10x Developer AI. The user wants you to perform a follow-up refinement on an existing running codebase: ${newInstruction}.
+            CONSTITUTION & CRITICAL RULES:
+            1. The codebase is already running and cloned. You are inside the Docker container.
+            2. BEFORE making changes, explore the project structure first (ls, cat, find) to understand what you're working with.
+            3. NEVER use placeholder code. Always write complete, production-ready code.
+            ${workspaceContext}
+            ${attachmentsContext}
+            
+            Past actions and outputs in this refinement session:
+            ${history}
+            
+            We are in iteration ${loopCount} (Max 10). 
+            CHAIN OF THOUGHT:
+            First, briefly think step-by-step in English about what you are going to do and why.
+            Then, provide a SINGLE bash command to execute in the workspace to make progress on this task.
+            You MUST place your bash command inside a \`\`\`bash code block. 
+            If you think the refinement is completely finished, output: \`\`\`bash\necho "DONE"\n\`\`\``,
+          });
+
+          // Extract bash command from code block, or fallback to full text
+          const codeBlockMatch = text.match(/```(?:bash|sh)?\n([\s\S]*?)```/);
+          const command = (codeBlockMatch ? codeBlockMatch[1] : text).trim();
+          
+          await this.addLog(taskId, 'info', `AI Reasoning: ${text.replace(/```(?:bash|sh)?\n[\s\S]*?```/, '').trim() || '(No reasoning provided)'}`);
+
+          if (command) {
+            await this.addLog(taskId, 'info', `> ${command.substring(0, 500)}${command.length > 500 ? '...' : ''}`);
+            if (command.includes('DONE')) {
+              isTaskComplete = true;
+              break;
+            }
+
+            const result = await this.dockerService.executeCommand(containerId, command);
+            let truncatedOutput = result.stdout || result.stderr || 'Command executed silently.';
+            if (truncatedOutput.length > 2000) truncatedOutput = truncatedOutput.substring(0, 2000) + '\n... [OUTPUT TRUNCATED]';
+            
+            await this.addLog(taskId, 'info', `Tool output: ${truncatedOutput.substring(0, 500)}${truncatedOutput.length > 500 ? '...' : ''}`);
+            history += `Command: ${command}\nOutput:\n${truncatedOutput}\n\n`;
+          } else {
+             break;
+          }
+        } catch (error) {
+          await this.addLog(taskId, 'error', `AI execution failed: ${error.message}`);
+          break;
+        }
+      }
+      
+      // Re-generate diff after refinement
+      await this.addLog(taskId, 'process', 'Generating updated code diff...');
+      await this.dockerService.executeCommand(containerId!, `cd ${primaryTargetDir} && git add -A`);
+      const diffResult = await this.dockerService.executeCommand(containerId!, `cd ${primaryTargetDir} && git diff --cached`);
+      await this.prisma.task.update({ where: { id: taskId }, data: { diff: diffResult.stdout, status: 'awaiting-review' } });
+      await this.addLog(taskId, 'success', `Refinement complete. Waiting for review.`);
+      
+    } catch (e: any) {
+      await this.addLog(taskId, 'error', `Failed to refine task: ${e.message}`);
+      await this.prisma.task.update({ where: { id: taskId }, data: { status: 'awaiting-review' } });
+    }
+  }
+
+  async mergeTask(taskId: string, targetMergeBranch: string) {
+    const containerId = this.activeContainers.get(taskId);
+    if (!containerId) {
+      await this.prisma.task.update({ where: { id: taskId }, data: { status: 'failed' } });
+      await this.addLog(taskId, 'error', 'Task container is no longer active or has expired. Cannot merge changes.');
+      throw new Error('Task container is no longer active or expired.');
+    }
+
+    const task = await this.prisma.task.findUnique({ where: { id: taskId }, include: { user: true } });
+    if (!task) throw new Error('Task not found');
+
+    await this.prisma.task.update({ where: { id: taskId }, data: { status: 'in-progress' } });
+    await this.addLog(taskId, 'process', `Initiating merge into ${targetMergeBranch}...`);
+
+    try {
+      const aiModel = this.getModel(task.llmProvider || undefined, task.llmModel || undefined);
+
+      await this.dockerService.executeCommand(containerId, `git config --global user.email "bot@pocketdev.app"`);
+      await this.dockerService.executeCommand(containerId, `git config --global user.name "PocketDev AI"`);
+
+      const reposToMerge = [
+        { dir: task.secondaryRepoUrl ? task.repoName || 'primary-repo' : '.', source: task.branchName || `ai-task-${taskId}`, url: task.repoUrl }
+      ];
+      if (task.secondaryRepoUrl) {
+        reposToMerge.push({
+          dir: task.secondaryRepoName || 'secondary-repo',
+          source: task.secondaryBranchName || `ai-task-${taskId}`,
+          url: task.secondaryRepoUrl
+        });
+      }
+
+      for (const repo of reposToMerge) {
+        const d = repo.dir;
+        await this.addLog(taskId, 'process', `[${d === '.' ? 'Primary Repo' : d}] Committing changes to ${repo.source}...`);
+        await this.dockerService.executeCommand(containerId, `cd ${d} && (env GIT_TERMINAL_PROMPT=0 git checkout -b ${repo.source} || env GIT_TERMINAL_PROMPT=0 git checkout ${repo.source})`);
+        await this.dockerService.executeCommand(containerId, `cd ${d} && git add -A`);
+        await this.dockerService.executeCommand(containerId, `cd ${d} && (git commit -m "AI: ${task.description}" || echo "No changes to commit")`);
+
+        await this.addLog(taskId, 'process', `[${d === '.' ? 'Primary Repo' : d}] Checking out and pulling ${targetMergeBranch}...`);
+        if (repo.url && task.user.accessToken) {
+          const authUrl = repo.url.replace('https://', `https://${task.user.accessToken}@`);
+          await this.dockerService.executeCommand(containerId, `cd ${d} && git remote set-url origin ${authUrl}`);
+        }
+        await this.dockerService.executeCommand(containerId, `cd ${d} && git fetch origin`);
+        await this.dockerService.executeCommand(containerId, `cd ${d} && (env GIT_TERMINAL_PROMPT=0 git checkout ${targetMergeBranch} || env GIT_TERMINAL_PROMPT=0 git checkout -b ${targetMergeBranch} origin/${targetMergeBranch} || env GIT_TERMINAL_PROMPT=0 git checkout -b ${targetMergeBranch})`);
+        await this.dockerService.executeCommand(containerId, `cd ${d} && (env GIT_TERMINAL_PROMPT=0 git pull origin ${targetMergeBranch} || echo "No remote branch yet")`);
+
+        await this.addLog(taskId, 'process', `[${d === '.' ? 'Primary Repo' : d}] Merging ${repo.source} into ${targetMergeBranch}...`);
+        const mergeResult = await this.dockerService.executeCommand(containerId, `cd ${d} && env GIT_TERMINAL_PROMPT=0 git merge ${repo.source}`);
+
+        if (mergeResult.exitCode !== 0) {
+          // Merge conflict detected
+          await this.addLog(taskId, 'warning', `[${d === '.' ? 'Primary Repo' : d}] Merge conflict detected! Engaging AI Conflict Resolution Loop...`);
+          await this.addLog(taskId, 'info', mergeResult.stdout || mergeResult.stderr);
+          
+          let fixLoopCount = 0;
+          let fixComplete = false;
+          let history = `Merge conflict output:\n${mergeResult.stdout || mergeResult.stderr}\n\n`;
+
+          while (!fixComplete && fixLoopCount < 5) {
+            fixLoopCount++;
+            await this.addLog(taskId, 'process', `[${d === '.' ? 'Primary Repo' : d}] AI resolving conflicts... (iteration ${fixLoopCount})`);
+            try {
+              const { text } = await generateText({
+                model: aiModel,
+                prompt: `You are an AI developer agent. You encountered a merge conflict while merging ${repo.source} into ${targetMergeBranch} in directory ${d}.
+                
+Project language/framework: ${((task as any).meta)?.language || 'Unknown'}.
+
+Past actions and outputs:
+${history}
+
+Fix iteration ${fixLoopCount} of 5. You MUST resolve standard Git merge conflict markers (<<<<<<<, =======, >>>>>>>) in the files, verify the fix passes if applicable, and then run \`git add -A && git commit -m "Resolve merge conflicts"\`.
+Output a SINGLE bash command to make progress or resolve the conflict.
+Do not include markdown formatting or backticks, just the raw bash command.
+If you believe the fix is completely finished and committed, output: echo "DONE"`,
+              });
+
+              const fixCommand = text.match(/\`\`\`(?:bash|sh)?\n([\s\S]*?)\`\`\`/) ? text.match(/\`\`\`(?:bash|sh)?\n([\s\S]*?)\`\`\`/)![1].trim() : text.trim();
+              await this.addLog(taskId, 'info', `> ${fixCommand}`);
+
+              if (fixCommand.includes('DONE')) {
+                fixComplete = true;
+                break;
+              }
+
+              const fixResult = await this.dockerService.executeCommand(containerId, `cd ${d} && ${fixCommand}`);
+              await this.addLog(taskId, 'info', `Tool output: ${fixResult.stdout.substring(0, 500)}${fixResult.stdout.length > 500 ? '...' : ''}`);
+              history += `Command: ${fixCommand}\nOutput: ${fixResult.stdout || fixResult.stderr}\n\n`;
+            } catch (error) {
+              await this.addLog(taskId, 'error', `AI conflict resolution failed: ${error.message}`);
+              break;
+            }
+          }
+
+          if (!fixComplete) {
+            throw new Error(`[${d === '.' ? 'Primary Repo' : d}] AI was unable to resolve merge conflicts within 5 iterations.`);
+          }
+        }
+
+        await this.addLog(taskId, 'success', `✓ [${d === '.' ? 'Primary Repo' : d}] Clean merge. Pushing to ${targetMergeBranch}...`);
+        const pushResult = await this.dockerService.executeCommand(containerId, `cd ${d} && env GIT_TERMINAL_PROMPT=0 git push origin ${targetMergeBranch}`);
+        if (pushResult.exitCode !== 0) throw new Error(`[${d === '.' ? 'Primary Repo' : d}] Push failed: ${pushResult.stderr}`);
+      }
+
+      await this.addLog(taskId, 'success', `✓ All repositories merged and pushed successfully to ${targetMergeBranch}`);
+      await this.prisma.task.update({ where: { id: taskId }, data: { status: 'completed' } });
+      
+      this.activeContainers.delete(taskId);
+      await this.dockerService.cleanupWorkspace(containerId);
+
+    } catch (e: any) {
+      await this.addLog(taskId, 'error', `Failed to merge task: ${e.message}`);
+      await this.prisma.task.update({ where: { id: taskId }, data: { status: 'awaiting-review' } });
+    }
+  }
+
+  async cancelTaskExecution(taskId: string) {
+    const containerId = this.activeContainers.get(taskId);
+    if (containerId) {
+      console.log(`[Agent] Hard killing container for cancelled task: ${taskId}`);
+      await this.dockerService.cleanupWorkspace(containerId);
+      this.activeContainers.delete(taskId);
     }
   }
 }

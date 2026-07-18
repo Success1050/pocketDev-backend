@@ -32,7 +32,7 @@ export class JobProducerService {
    * Enqueue a task for background processing.
    * The task continues running on the server even if the user closes the app.
    */
-  async enqueueTask(data: TaskJobPayload) {
+  async enqueueTask(data: TaskJobPayload, priority?: number) {
     // 1. Log the background job in the database for auditing
     const bgJob = await this.prisma.backgroundJob.create({
       data: {
@@ -54,6 +54,7 @@ export class JobProducerService {
       backoff: { type: 'exponential', delay: 5000 },
       removeOnComplete: false,
       removeOnFail: false,
+      priority: priority || 10,
     });
 
     this.logger.log(`Task ${data.taskId} enqueued as job ${job.id} (bg: ${bgJob.id})`);
