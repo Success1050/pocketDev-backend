@@ -4,6 +4,8 @@ import { DockerService } from '../docker/docker.service';
 import { PrismaService } from '../../core/prisma/prisma.service';
 import { generateText, streamText } from 'ai';
 import { createAnthropic } from '@ai-sdk/anthropic';
+import { TasksGateway } from '../tasks/tasks.gateway';
+
 @Injectable()
 export class AgentService {
   private activeContainers: Map<string, string> = new Map();
@@ -12,6 +14,7 @@ export class AgentService {
     private readonly dockerService: DockerService,
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
+    private readonly tasksGateway: TasksGateway,
   ) { }
 
   private getModel(providerName?: string, modelName?: string) {
@@ -75,9 +78,10 @@ export class AgentService {
    * Append a structured log entry to the TaskLog table.
    */
   async addLog(taskId: string, type: 'info' | 'error' | 'success' | 'warning' | 'process', message: string) {
-    await this.prisma.taskLog.create({
+    const log = await this.prisma.taskLog.create({
       data: { taskId, type, message },
     });
+    this.tasksGateway.emitLogAdded(taskId, log);
     console.log(`[TaskLog:${type}] ${message}`);
   }
 
@@ -157,7 +161,8 @@ export class AgentService {
       await this.addLog(taskId, 'info', `Task started — ${payload.llm?.provider} (${payload.llm?.model})`);
 
       // Update status
-      await this.prisma.task.update({ where: { id: taskId }, data: { status: 'in-progress' } });
+      const updatedTask = await this.prisma.task.update({ where: { id: taskId }, data: { status: 'in-progress' } });
+      this.tasksGateway.emitTaskUpdated(taskId, updatedTask);
       await this.addLog(taskId, 'process', 'Status updated to in-progress');
 
       // Step 1: Spin up Workspace
@@ -251,18 +256,20 @@ export class AgentService {
         for await (const textPart of textStream) {
           planText += textPart;
           if (Date.now() - lastUpdateTime > 500) {
-            await this.prisma.task.update({
+            const updatedTaskPlan = await this.prisma.task.update({
               where: { id: taskId },
               data: { plan: planText, status: 'awaiting-approval' },
             });
+            this.tasksGateway.emitTaskUpdated(taskId, updatedTaskPlan);
             lastUpdateTime = Date.now();
           }
         }
         
-        await this.prisma.task.update({
+        const finalUpdatedTaskPlan = await this.prisma.task.update({
           where: { id: taskId },
           data: { plan: planText, status: 'awaiting-approval' },
         });
+        this.tasksGateway.emitTaskUpdated(taskId, finalUpdatedTaskPlan);
       };
 
       await generateAndStreamPlan(`You are an AI developer agent. The user wants you to: ${payload.instruction}.
@@ -282,7 +289,8 @@ export class AgentService {
         }
         if (currentTask?.status === 'in-progress' || currentTask?.status === 'plan-approved') {
           planApproved = true;
-          await this.prisma.task.update({ where: { id: taskId }, data: { status: 'in-progress' } });
+          const uTask = await this.prisma.task.update({ where: { id: taskId }, data: { status: 'in-progress' } });
+          this.tasksGateway.emitTaskUpdated(taskId, uTask);
         } else if (currentTask?.status === 'plan-rejected') {
           await this.addLog(taskId, 'process', `Plan rejected. Re-generating based on feedback...`);
           await generateAndStreamPlan(`You are an AI developer agent. The user wants you to: ${currentTask?.description}.

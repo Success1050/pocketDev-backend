@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../core/prisma/prisma.service';
 import { AgentService } from '../agent/agent.service';
 import { JobProducerService } from '../jobs/job-producer.service';
+import { TasksGateway } from './tasks.gateway';
 
 @Injectable()
 export class TasksService {
@@ -11,6 +12,7 @@ export class TasksService {
     private readonly prisma: PrismaService,
     private readonly agentService: AgentService,
     private readonly jobProducer: JobProducerService,
+    private readonly tasksGateway: TasksGateway,
   ) {}
 
   async createTask(userId: string, payload: any) {
@@ -86,10 +88,12 @@ export class TasksService {
   }
 
   async approvePlan(taskId: string) {
-    return this.prisma.task.update({
+    const task = await this.prisma.task.update({
       where: { id: taskId },
       data: { status: 'plan-approved' },
     });
+    this.tasksGateway.emitTaskUpdated(taskId, task);
+    return task;
   }
 
   async cancelTask(taskId: string) {
@@ -97,6 +101,7 @@ export class TasksService {
       where: { id: taskId },
       data: { status: 'cancelled' },
     });
+    this.tasksGateway.emitTaskUpdated(taskId, task);
     // Hard kill the underlying docker container immediately if it's currently executing
     this.agentService.cancelTaskExecution(taskId).catch(err => 
       this.logger.error(`Failed to cancel agent execution for ${taskId}`, err)
@@ -107,13 +112,15 @@ export class TasksService {
   async provideFeedback(taskId: string, feedback: string) {
     const task = await this.prisma.task.findUnique({ where: { id: taskId } });
     if (!task) throw new Error('Task not found');
-    return this.prisma.task.update({
+    const updatedTask = await this.prisma.task.update({
       where: { id: taskId },
       data: { 
         status: 'plan-rejected', 
         description: `${task.description}\n\n[USER FEEDBACK ON PLAN]: ${feedback}`
       },
     });
+    this.tasksGateway.emitTaskUpdated(taskId, updatedTask);
+    return updatedTask;
   }
 
   async getUserTasks(userId: string) {
