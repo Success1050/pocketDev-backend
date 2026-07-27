@@ -43,8 +43,7 @@ export class AuthController {
       const { user, token } = await this.authService.githubLogin(code);
 
       if (state === 'web') {
-        // const frontendUrl = this.configService.get<string>('FRONTEND_URL') || 'http://localhost:3001';
-        const frontendUrl = 'http://localhost:3001';
+        const frontendUrl = this.configService.get<string>('FRONTEND_URL') || 'http://localhost:3001';
         const webUrl = `${frontendUrl}/auth/github?token=${token}&userId=${user.id}`;
         return res.redirect(webUrl);
       }
