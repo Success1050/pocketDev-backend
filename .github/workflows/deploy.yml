@@ -17,8 +17,9 @@ jobs:
           username: ${{ secrets.EC2_USERNAME }}
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
-            cd pocket-dev-backend
+            cd pocketDev-backend
             git pull
             npm install --legacy-peer-deps
+            npx prisma generate
             npm run build
             pm2 restart pocketdev-backend
