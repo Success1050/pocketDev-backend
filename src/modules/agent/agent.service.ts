@@ -248,21 +248,31 @@ export class AgentService {
       const generateAndStreamPlan = async (promptText: string) => {
         let planText = '';
         let lastUpdateTime = Date.now();
-        const { textStream } = await streamText({
-          model: aiModel,
-          prompt: promptText,
-        });
+        
+        try {
+          const { textStream } = await streamText({
+            model: aiModel,
+            prompt: promptText,
+          });
 
-        for await (const textPart of textStream) {
-          planText += textPart;
-          if (Date.now() - lastUpdateTime > 500) {
-            const updatedTaskPlan = await this.prisma.task.update({
-              where: { id: taskId },
-              data: { plan: planText, status: 'awaiting-approval' },
-            });
-            this.tasksGateway.emitTaskUpdated(taskId, updatedTaskPlan);
-            lastUpdateTime = Date.now();
+          for await (const textPart of textStream) {
+            planText += textPart;
+            if (Date.now() - lastUpdateTime > 500) {
+              const updatedTaskPlan = await this.prisma.task.update({
+                where: { id: taskId },
+                data: { plan: planText, status: 'awaiting-approval' },
+              });
+              this.tasksGateway.emitTaskUpdated(taskId, updatedTaskPlan);
+              lastUpdateTime = Date.now();
+            }
           }
+        } catch (error: any) {
+          console.error('[Agent] Plan generation error:', error);
+          throw new Error(`AI Plan Generation failed: ${error.message || 'Unknown error. Check API keys and balance.'}`);
+        }
+
+        if (!planText || planText.trim().length === 0) {
+          throw new Error("AI provider returned an empty response. Please check your API keys or credit balance.");
         }
         
         const finalUpdatedTaskPlan = await this.prisma.task.update({
