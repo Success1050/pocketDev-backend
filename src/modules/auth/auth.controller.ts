@@ -11,7 +11,7 @@ export class AuthController {
   ) { }
 
   @Get('github/login')
-  async githubLogin(@Query('platform') platform: string, @Res() res: Response) {
+  async githubLogin(@Query('platform') platform: string, @Query('prompt') prompt: string, @Res() res: Response) {
     const clientId = this.configService.get<string>('GITHUB_CLIENT_ID');
     const redirectUri = this.configService.get<string>('GITHUB_CALLBACK_URL');
 
@@ -19,7 +19,7 @@ export class AuthController {
       throw new HttpException('GitHub configuration missing', HttpStatus.INTERNAL_SERVER_ERROR);
     }
 
-    const state = platform === 'web' ? 'web' : 'mobile';
+    const state = platform || 'web';
 
     const params = new URLSearchParams({
       client_id: clientId,
@@ -27,6 +27,10 @@ export class AuthController {
       scope: 'user:email repo',
       state: state,
     });
+
+    if (prompt === 'consent') {
+      params.append('prompt', 'consent');
+    }
 
     const githubUrl = `https://github.com/login/oauth/authorize?${params.toString()}`;
     console.log('Redirecting to GitHub:', githubUrl);
@@ -42,9 +46,10 @@ export class AuthController {
     try {
       const { user, token } = await this.authService.githubLogin(code);
 
-      if (state === 'web') {
+      if (state?.startsWith('web')) {
         const frontendUrl = this.configService.get<string>('FRONTEND_URL') || 'http://localhost:3001';
-        const webUrl = `${frontendUrl}/auth/github?token=${token}&userId=${user.id}`;
+        const redirectPath = state === 'web_settings' ? '/settings?auth_success=true' : `/auth/github?token=${token}&userId=${user.id}`;
+        const webUrl = `${frontendUrl}${redirectPath}`;
         return res.redirect(webUrl);
       }
 
