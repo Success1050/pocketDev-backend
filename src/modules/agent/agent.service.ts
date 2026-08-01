@@ -568,6 +568,7 @@ export class AgentService {
         setTimeout(async () => {
           if (this.activeContainers.has(taskId)) {
              this.activeContainers.delete(taskId);
+             await this.dockerService.cleanupWorkspace(containerId!).catch(console.error);
              await this.updateTaskAndEmit(taskId, { status: 'cancelled' }).catch(console.error);
              await this.addLog(taskId, 'warning', 'Workspace destroyed automatically after 30 minutes of inactivity.');
           }
