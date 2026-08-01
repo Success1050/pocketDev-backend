@@ -26,6 +26,7 @@ model User {
   pushToken      String?
   isPremium      Boolean  @default(false)
   subscriptionId String? // RevenueCat original_app_user_id or subscriber id
+  tier           String   @default("free") // free | premium | pro
   tasks          Task[]
   notifications  Notification[]
   projectEnvs    ProjectEnvironment[]
@@ -115,4 +116,16 @@ model ProjectEnvironment {
   updatedAt  DateTime @updatedAt
 
   @@unique([userId, repoOwner, repoName])
+}
+
+model Usage {
+  id             String   @id @default(uuid())
+  userId         String
+  month          String   // Format: "YYYY-MM"
+  tasksUsed      Int      @default(0)
+  tokensUsed     Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([userId, month])
 }

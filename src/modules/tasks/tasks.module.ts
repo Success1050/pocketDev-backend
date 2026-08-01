@@ -8,9 +8,10 @@ import { UploadController } from './upload.controller';
 import { DownloadController } from './download.controller';
 import { PublishGithubController } from './publish-github.controller';
 import { DockerModule } from '../docker/docker.module';
+import { UsageModule } from '../usage/usage.module';
 
 @Module({
-  imports: [JobsModule, AgentModule, DockerModule],
+  imports: [JobsModule, AgentModule, DockerModule, UsageModule],
   controllers: [TasksController, UploadController, DownloadController, PublishGithubController],
   providers: [TasksService, PrismaClient],
   exports: [TasksService],

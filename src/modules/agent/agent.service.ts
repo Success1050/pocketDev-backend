@@ -5,6 +5,7 @@ import { PrismaService } from '../../core/prisma/prisma.service';
 import { generateText, streamText } from 'ai';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { TasksGateway } from '../tasks/tasks.gateway';
+import { UsageService, UserTier } from '../usage/usage.service';
 
 @Injectable()
 export class AgentService {
@@ -15,6 +16,7 @@ export class AgentService {
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
     private readonly tasksGateway: TasksGateway,
+    private readonly usageService: UsageService,
   ) { }
 
   private getModel(providerName?: string, modelName?: string) {
@@ -31,7 +33,15 @@ export class AgentService {
     return this.activeContainers.get(taskId);
   }
 
-  async getAvailableModels() {
+  async getAvailableModels(userTier: UserTier = 'free') {
+    const MODEL_WHITELIST = [
+      { id: 'claude-haiku-4-5-20250414', name: 'Claude Haiku 4.5', tier: 'free' },
+      { id: 'claude-sonnet-4-5-20250514', name: 'Claude Sonnet 4.5', tier: 'premium' },
+      { id: 'claude-opus-4-6-20250616', name: 'Claude Opus 4.6', tier: 'pro' },
+      { id: 'claude-opus-4-1-20250520', name: 'Claude Opus 4.1', tier: 'pro' },
+    ];
+
+    let apiModels: any[] = [];
     try {
       const response = await fetch('https://api.anthropic.com/v1/models', {
         headers: {
@@ -39,39 +49,35 @@ export class AgentService {
           'anthropic-version': '2023-06-01'
         }
       });
-      
-      if (!response.ok) {
-        throw new Error(`Anthropic API error: ${response.statusText}`);
+      if (response.ok) {
+        const data = await response.json();
+        apiModels = data.data;
       }
-
-      const data = await response.json();
-      
-      const models = data.data.map((m: any) => ({
-        id: m.id,
-        name: m.display_name || m.name || m.id
-      }));
-
-      return [
-        {
-          providerId: 'anthropic',
-          name: 'Anthropic',
-          models: models,
-        }
-      ];
     } catch (error) {
       console.error('Failed to fetch Anthropic models:', error);
-      return [
-        {
-          providerId: 'anthropic',
-          name: 'Anthropic',
-          models: [
-            { id: 'claude-3-5-sonnet-20241022', name: 'Claude 3.5 Sonnet' },
-            { id: 'claude-3-opus-20240229', name: 'Claude 3 Opus' },
-            { id: 'claude-3-5-haiku-20241022', name: 'Claude 3.5 Haiku' },
-          ],
-        },
-      ];
     }
+
+    const models = MODEL_WHITELIST.map(wlModel => {
+      // Check if API returned it, otherwise use our own names
+      const apiModel = apiModels.find(m => m.id === wlModel.id);
+      
+      const locked = !this.usageService.isModelAllowedForTier(wlModel.id, userTier);
+      
+      return {
+        id: wlModel.id,
+        name: wlModel.name, // always use our display name or apiModel name if preferred
+        locked,
+        requiredTier: wlModel.tier
+      };
+    });
+
+    return [
+      {
+        providerId: 'anthropic',
+        name: 'Anthropic',
+        models: models,
+      }
+    ];
   }
 
   /**

@@ -26,22 +26,26 @@ export class RevenueCatService {
       case 'INITIAL_PURCHASE':
       case 'RENEWAL':
       case 'UNCANCELLATION':
-      case 'TRIAL_STARTED':
+      case 'TRIAL_STARTED': {
+        const productId = String(event.product_id || '').toLowerCase();
+        const tier = productId.includes('pro') ? 'pro' : 'premium';
         await this.prisma.user.update({
           where: { id: userId },
           data: {
             isPremium: true,
+            tier: tier,
             subscriptionId: event.original_app_user_id || app_user_id
           },
         });
-        this.logger.log(`User ${userId} upgraded to premium`);
+        this.logger.log(`User ${userId} upgraded to ${tier}`);
         break;
+      }
 
       case 'CANCELLATION':
       case 'EXPIRATION':
         await this.prisma.user.update({
           where: { id: userId },
-          data: { isPremium: false },
+          data: { isPremium: false, tier: 'free' },
         });
         this.logger.log(`User ${userId} downgraded to free`);
         break;

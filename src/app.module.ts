@@ -15,6 +15,8 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
 import { JobsModule } from './modules/jobs/jobs.module';
 import { RevenueCatModule } from './modules/revenuecat/revenuecat.module';
 import { GatewayModule } from './modules/gateway/gateway.module';
+import { UsageModule } from './modules/usage/usage.module';
+import { LemonSqueezyModule } from './modules/lemonsqueezy/lemonsqueezy.module';
 
 @Module({
   imports: [
@@ -50,6 +52,8 @@ import { GatewayModule } from './modules/gateway/gateway.module';
     JobsModule,
     RevenueCatModule,
     GatewayModule,
+    UsageModule,
+    LemonSqueezyModule,
   ],
   controllers: [AppController],
   providers: [AppService],

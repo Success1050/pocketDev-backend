@@ -1,8 +1,9 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../../core/prisma/prisma.service';
 import { AgentService } from '../agent/agent.service';
 import { JobProducerService } from '../jobs/job-producer.service';
 import { TasksGateway } from './tasks.gateway';
+import { UsageService, UserTier } from '../usage/usage.service';
 
 @Injectable()
 export class TasksService {
@@ -13,9 +14,24 @@ export class TasksService {
     private readonly agentService: AgentService,
     private readonly jobProducer: JobProducerService,
     private readonly tasksGateway: TasksGateway,
+    private readonly usageService: UsageService,
   ) {}
 
   async createTask(userId: string, payload: any) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    const tier = (user?.tier || 'free') as UserTier;
+
+    // Quota evaluation
+    const quota = await this.usageService.canCreateTask(userId, tier);
+    if (!quota.allowed) {
+      throw new ForbiddenException(quota.reason);
+    }
+
+    // Model whitelist evaluation
+    if (payload.llm?.model && !this.usageService.isModelAllowedForTier(payload.llm.model, tier)) {
+      throw new ForbiddenException(`The selected AI model (${payload.llm.model}) is locked on your current plan (${tier.toUpperCase()}). Please upgrade to access this model.`);
+    }
+
     // 1. Create task in DB
     const task = await this.prisma.task.create({
       data: {
@@ -59,6 +75,8 @@ export class TasksService {
         this.logger.error('Direct task processing failed', err);
       });
     }
+
+    await this.usageService.incrementTaskCount(userId);
 
     return task;
   }
@@ -177,5 +195,13 @@ export class TasksService {
       this.logger.error(`Failed to merge task ${taskId}`, err);
     });
     return { success: true, message: `Merging into ${targetBranch}...` };
+  }
+
+  async getUserUsage(userId: string) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    const tier = (user?.tier || 'free') as UserTier;
+    const usage = await this.usageService.getUsage(userId);
+    const limits = this.usageService.getLimitsForTier(tier);
+    return { tier, usage, limits };
   }
 }

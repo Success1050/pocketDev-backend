@@ -25,6 +25,12 @@ export class TasksController {
     return this.tasksService.getLatestTask(userId);
   }
 
+  @Get('usage')
+  async getUsage(@Req() req: any) {
+    const userId = req.user?.id;
+    return this.tasksService.getUserUsage(userId);
+  }
+
   @Delete(':id/logs')
   async clearLogs(@Param('id') id: string) {
     return this.tasksService.clearLogs(id);
