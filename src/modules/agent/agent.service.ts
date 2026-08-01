@@ -86,6 +86,18 @@ export class AgentService {
   }
 
   /**
+   * Update a task in database and immediately emit a taskUpdated socket event.
+   */
+  async updateTaskAndEmit(taskId: string, data: any) {
+    const updated = await this.prisma.task.update({
+      where: { id: taskId },
+      data,
+    });
+    this.tasksGateway.emitTaskUpdated(taskId, updated);
+    return updated;
+  }
+
+  /**
    * Dynamically detect project setup strategy using an LLM.
    */
   private async getProjectSetupStrategy(containerId: string, targetDir: string, port: number) {
@@ -542,7 +554,7 @@ export class AgentService {
     } catch (error) {
       console.error(`[Agent] Task failed:`, error);
       await this.addLog(taskId, 'error', `Task failed: ${error.message}`);
-      await this.prisma.task.update({ where: { id: taskId }, data: { status: 'failed', logs: error.message } });
+      await this.updateTaskAndEmit(taskId, { status: 'failed', logs: error.message });
     } finally {
       // Do NOT delete from activeContainers here, unless it failed
       if (!taskSuccess && containerId) {
@@ -556,11 +568,7 @@ export class AgentService {
         setTimeout(async () => {
           if (this.activeContainers.has(taskId)) {
              this.activeContainers.delete(taskId);
-             await this.dockerService.cleanupWorkspace(containerId!).catch(console.error);
-             await this.prisma.task.update({
-               where: { id: taskId },
-               data: { status: 'cancelled' }
-             }).catch(console.error);
+             await this.updateTaskAndEmit(taskId, { status: 'cancelled' }).catch(console.error);
              await this.addLog(taskId, 'warning', 'Workspace destroyed automatically after 30 minutes of inactivity.');
           }
         }, 30 * 60 * 1000);
@@ -572,7 +580,7 @@ export class AgentService {
   async commitAndPushTask(taskId: string) {
     const containerId = this.activeContainers.get(taskId);
     if (!containerId) {
-      await this.prisma.task.update({ where: { id: taskId }, data: { status: 'failed' } });
+      await this.updateTaskAndEmit(taskId, { status: 'failed' });
       await this.addLog(taskId, 'error', 'Task container is no longer active or has expired. Cannot push changes.');
       throw new Error('Task container is no longer active or expired.');
     }
@@ -581,7 +589,7 @@ export class AgentService {
     if (!task) throw new Error('Task not found');
     
     try {
-      await this.prisma.task.update({ where: { id: taskId }, data: { status: 'pushing' } });
+      await this.updateTaskAndEmit(taskId, { status: 'pushing' });
       await this.addLog(taskId, 'process', 'Pushing approved changes to GitHub...');
 
       const targetBranch = task.branchName || `ai-task-${taskId}`;
@@ -596,10 +604,10 @@ export class AgentService {
       }
 
       await this.addLog(taskId, 'success', `✓ Changes pushed successfully to ${targetBranch}`);
-      await this.prisma.task.update({ where: { id: taskId }, data: { status: 'completed' } });
+      await this.updateTaskAndEmit(taskId, { status: 'completed' });
     } catch (e: any) {
       await this.addLog(taskId, 'error', `Failed to push changes: ${e.message}`);
-      await this.prisma.task.update({ where: { id: taskId }, data: { status: 'failed' } });
+      await this.updateTaskAndEmit(taskId, { status: 'failed' });
     } finally {
       this.activeContainers.delete(taskId);
       await this.dockerService.cleanupWorkspace(containerId);
@@ -610,7 +618,7 @@ export class AgentService {
   async discardTask(taskId: string) {
     const containerId = this.activeContainers.get(taskId);
     
-    await this.prisma.task.update({ where: { id: taskId }, data: { status: 'cancelled' } });
+    await this.updateTaskAndEmit(taskId, { status: 'cancelled' });
     await this.addLog(taskId, 'warning', 'Task discarded by user. Cleaning up workspace...');
     
     if (containerId) {
@@ -622,7 +630,7 @@ export class AgentService {
   async refineTask(taskId: string, newInstruction: string, attachments?: string[]) {
     const containerId = this.activeContainers.get(taskId);
     if (!containerId) {
-      await this.prisma.task.update({ where: { id: taskId }, data: { status: 'failed' } });
+      await this.updateTaskAndEmit(taskId, { status: 'failed' });
       await this.addLog(taskId, 'error', 'Task container is no longer active or has expired. Cannot refine.');
       throw new Error('Task container is no longer active.');
     }
@@ -630,7 +638,7 @@ export class AgentService {
     const task = await this.prisma.task.findUnique({ where: { id: taskId }, include: { user: true } });
     if (!task) throw new Error('Task not found');
 
-    await this.prisma.task.update({ where: { id: taskId }, data: { status: 'in-progress' } });
+    await this.updateTaskAndEmit(taskId, { status: 'in-progress' });
     await this.addLog(taskId, 'process', `Executing refinement: ${newInstruction}`);
 
     try {
@@ -720,19 +728,19 @@ export class AgentService {
       await this.addLog(taskId, 'process', 'Generating updated code diff...');
       await this.dockerService.executeCommand(containerId!, `cd ${primaryTargetDir} && git add -A`);
       const diffResult = await this.dockerService.executeCommand(containerId!, `cd ${primaryTargetDir} && git diff --cached`);
-      await this.prisma.task.update({ where: { id: taskId }, data: { diff: diffResult.stdout, status: 'awaiting-review' } });
+      await this.updateTaskAndEmit(taskId, { diff: diffResult.stdout, status: 'awaiting-review' });
       await this.addLog(taskId, 'success', `Refinement complete. Waiting for review.`);
       
     } catch (e: any) {
       await this.addLog(taskId, 'error', `Failed to refine task: ${e.message}`);
-      await this.prisma.task.update({ where: { id: taskId }, data: { status: 'awaiting-review' } });
+      await this.updateTaskAndEmit(taskId, { status: 'awaiting-review' });
     }
   }
 
   async mergeTask(taskId: string, targetMergeBranch: string) {
     const containerId = this.activeContainers.get(taskId);
     if (!containerId) {
-      await this.prisma.task.update({ where: { id: taskId }, data: { status: 'failed' } });
+      await this.updateTaskAndEmit(taskId, { status: 'failed' });
       await this.addLog(taskId, 'error', 'Task container is no longer active or has expired. Cannot merge changes.');
       throw new Error('Task container is no longer active or expired.');
     }
@@ -740,7 +748,7 @@ export class AgentService {
     const task = await this.prisma.task.findUnique({ where: { id: taskId }, include: { user: true } });
     if (!task) throw new Error('Task not found');
 
-    await this.prisma.task.update({ where: { id: taskId }, data: { status: 'in-progress' } });
+    await this.updateTaskAndEmit(taskId, { status: 'in-progress' });
     await this.addLog(taskId, 'process', `Initiating merge into ${targetMergeBranch}...`);
 
     try {
@@ -835,14 +843,14 @@ If you believe the fix is completely finished and committed, output: echo "DONE"
       }
 
       await this.addLog(taskId, 'success', `✓ All repositories merged and pushed successfully to ${targetMergeBranch}`);
-      await this.prisma.task.update({ where: { id: taskId }, data: { status: 'completed' } });
+      await this.updateTaskAndEmit(taskId, { status: 'completed' });
       
       this.activeContainers.delete(taskId);
       await this.dockerService.cleanupWorkspace(containerId);
 
     } catch (e: any) {
       await this.addLog(taskId, 'error', `Failed to merge task: ${e.message}`);
-      await this.prisma.task.update({ where: { id: taskId }, data: { status: 'awaiting-review' } });
+      await this.updateTaskAndEmit(taskId, { status: 'awaiting-review' });
     }
   }
 
