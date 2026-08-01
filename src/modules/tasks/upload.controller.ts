@@ -1,4 +1,5 @@
 import { Controller, Post, Get, Param, Res, Req, UseInterceptors, UploadedFile, BadRequestException, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { FileInterceptor } from '@nestjs/platform-express';
 import type { Response, Request } from 'express';
 import { existsSync } from 'fs';
@@ -8,6 +9,8 @@ import AdmZip = require('adm-zip');
 
 @Controller('tasks/upload')
 export class UploadController {
+  constructor(private readonly configService: ConfigService) {}
+
   @Post()
   @UseInterceptors(FileInterceptor('file')) // Uses MemoryStorage by default
   async uploadFile(@UploadedFile() file: any, @Req() req: Request) {
@@ -51,9 +54,21 @@ export class UploadController {
 
     await fsPromises.writeFile(filePath, file.buffer);
 
-    // Return local URL using the incoming request's host and protocol
-    const protocol = req.protocol;
-    const host = req.get('host') || 'localhost:8080';
+    // Return URL using ConfigService or headers to avoid exposing localhost in production
+    let protocol = (req.get('x-forwarded-proto') || req.protocol || 'http') as string;
+    let host = req.get('x-forwarded-host') || req.get('host') || 'localhost:8080';
+
+    const configuredUrl = this.configService.get<string>('GITHUB_CALLBACK_URL') || this.configService.get<string>('BACKEND_URL');
+    if (configuredUrl) {
+      try {
+        const parsedUrl = new URL(configuredUrl);
+        host = parsedUrl.host; // domain and port if any
+        if (parsedUrl.protocol.startsWith('https')) {
+          protocol = 'https';
+        }
+      } catch (e) {}
+    }
+
     const uploadUrl = `${protocol}://${host}/tasks/upload/${filename}`;
 
     return { url: uploadUrl, envContent };
