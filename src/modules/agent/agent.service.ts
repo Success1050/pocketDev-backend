@@ -98,6 +98,23 @@ export class AgentService {
   }
 
   /**
+   * Detect if the user's instruction is preview-only (no code changes expected).
+   */
+  private isPreviewOnly(instruction: string): boolean {
+    const lower = instruction.toLowerCase();
+    const previewKeywords = [
+      'just run', 'live preview', 'run the preview', 'run preview',
+      'don\'t change', 'dont change', 'no changes', 'don\'t do any',
+      'dont do any', 'run locally', 'run dev', 'see the web app',
+      'don\'t make any', 'dont make any', 'preview only', 'just preview',
+      'don\'t do any job', 'dont do any job', 'just start', 'just launch',
+      'run the app', 'start the app', 'boot up', 'spin up',
+      'run the server', 'start the server', 'just the preview',
+    ];
+    return previewKeywords.some(kw => lower.includes(kw));
+  }
+
+  /**
    * Dynamically detect project setup strategy using an LLM.
    */
   private async getProjectSetupStrategy(containerId: string, targetDir: string, port: number) {
@@ -260,140 +277,149 @@ export class AgentService {
       const projectType = primaryStrategy.projectType;
       const projectTypeContext = `Project Type: ${projectType}`;
 
-      // Step 2.5: Planning
-      await this.addLog(taskId, 'process', `Generating Implementation Plan...`);
+      // Detect preview-only instructions
+      const isPreviewOnly = this.isPreviewOnly(payload.instruction);
       const aiModel = this.getModel(payload.llm?.provider, payload.llm?.model);
-
-      const generateAndStreamPlan = async (promptText: string) => {
-        let planText = '';
-        let lastUpdateTime = Date.now();
-        
-        try {
-          const { textStream } = await streamText({
-            model: aiModel,
-            prompt: promptText,
-          });
-
-          for await (const textPart of textStream) {
-            planText += textPart;
-            if (Date.now() - lastUpdateTime > 500) {
-              const updatedTaskPlan = await this.prisma.task.update({
-                where: { id: taskId },
-                data: { plan: planText, status: 'awaiting-approval' },
-              });
-              this.tasksGateway.emitTaskUpdated(taskId, updatedTaskPlan);
-              lastUpdateTime = Date.now();
-            }
-          }
-        } catch (error: any) {
-          console.error('[Agent] Plan generation error:', error);
-          throw new Error(`AI Plan Generation failed: ${error.message || 'Unknown error. Check API keys and balance.'}`);
-        }
-
-        if (!planText || planText.trim().length === 0) {
-          throw new Error("AI provider returned an empty response. Please check your API keys or credit balance.");
-        }
-        
-        const finalUpdatedTaskPlan = await this.prisma.task.update({
-          where: { id: taskId },
-          data: { plan: planText, status: 'awaiting-approval' },
-        });
-        this.tasksGateway.emitTaskUpdated(taskId, finalUpdatedTaskPlan);
-      };
-
-      await generateAndStreamPlan(`You are an AI developer agent. The user wants you to: ${payload.instruction}.
-        Project language/framework: ${payload.meta?.language || 'Unknown'}.${workspaceContext}${attachmentsContext}
-        Based on this, output a step-by-step implementation plan. 
-        Format it nicely in Markdown. Do not include introductory text, just the plan.`);
-      
-      await this.addLog(taskId, 'info', `Waiting for user to approve the plan...`);
-
-      let planApproved = false;
-      while (!planApproved) {
-        await new Promise(r => setTimeout(r, 3000));
-        const currentTask = await this.prisma.task.findUnique({ where: { id: taskId } });
-        if (currentTask?.status === 'cancelled') {
-          await this.addLog(taskId, 'error', 'Task was cancelled by user');
-          return;
-        }
-        if (currentTask?.status === 'in-progress' || currentTask?.status === 'plan-approved') {
-          planApproved = true;
-          const uTask = await this.prisma.task.update({ where: { id: taskId }, data: { status: 'in-progress' } });
-          this.tasksGateway.emitTaskUpdated(taskId, uTask);
-        } else if (currentTask?.status === 'plan-rejected') {
-          await this.addLog(taskId, 'process', `Plan rejected. Re-generating based on feedback...`);
-          await generateAndStreamPlan(`You are an AI developer agent. The user wants you to: ${currentTask?.description}.
-            Output a step-by-step implementation plan. Do not include introductory text.`);
-          await this.addLog(taskId, 'info', `Waiting for user to approve the revised plan...`);
-        }
-      }
-      await this.addLog(taskId, 'success', `Plan approved! Commencing execution.`);
-
-      // Step 3: AI Loop
-      await this.addLog(taskId, 'process', `Sending instruction to ${payload.llm?.provider} (${payload.llm?.model})...`);
-      const currentTaskFinal = await this.prisma.task.findUnique({ where: { id: taskId } });
-      await this.addLog(taskId, 'info', `Instruction: "${currentTaskFinal?.description || payload.instruction}"`);
-
-      let isTaskComplete = false;
-      let loopCount = 0;
       let history = '';
 
-      while (!isTaskComplete && loopCount < 15) {
-        const currentTaskLoop = await this.prisma.task.findUnique({ where: { id: taskId } });
-        if (currentTaskLoop?.status === 'cancelled') {
-          await this.addLog(taskId, 'error', 'Task was cancelled by user');
-          return;
-        }
+      if (isPreviewOnly) {
+        // Preview-only mode: skip plan generation and AI execution entirely
+        await this.addLog(taskId, 'info', `Preview-only mode — skipping plan and AI execution.`);
+        await this.addLog(taskId, 'success', `Jumping straight to live preview setup.`);
+      } else {
+        // Step 2.5: Planning
+        await this.addLog(taskId, 'process', `Generating Implementation Plan...`);
 
-        loopCount++;
-        await this.addLog(taskId, 'process', `AI thinking... (iteration ${loopCount})`);
-
-        try {
-          const { text } = await generateText({
-            model: aiModel,
-            prompt: `You are an elite, Senior 10x Developer AI. The user wants you to: ${payload.instruction}.
-            Project language/framework: ${payload.meta?.language || 'Unknown (inspect first)'}.
-            ${projectTypeContext}
-            
-            CONSTITUTION & CRITICAL RULES:
-            1. BEFORE writing any code, you MUST explore the codebase (using 'ls', 'cat', 'find', etc.) to understand the existing architecture, file structure, and what technology stack is being used.
-            2. If the project is a Node.js project with a frontend framework (Next.js, React, etc.), create the appropriate framework components (.tsx, .jsx, etc.) and integrate them into the existing routing and layout. Do NOT create standalone .html files.
-            3. If the project is a STATIC HTML/CSS/JS site (no package.json), edit the .html, .css, and .js files directly. Do NOT create package.json or try to use npm.
-            4. NEVER use placeholder code (e.g. "// insert logic here"). Always write complete, production-ready code.
-            5. ALWAYS verify your code before marking the task as DONE. For Node.js projects, run 'npm run build'. For static HTML, verify file paths are correct. For Python, run the relevant checks.
-            6. If there is a package.json, inspect it for essential scripts (migrations, seeding, etc.) and intelligently run those commands if the task requires them.${workspaceContext}
-            
-            Past actions and outputs:
-            ${history}
-            
-            We are in iteration ${loopCount} (Max 15). 
-            CHAIN OF THOUGHT:
-            First, briefly think step-by-step in English about what you are going to do and why.
-            Then, provide a SINGLE bash command to execute in the workspace to make progress on this task.
-            You MUST place your bash command inside a \`\`\`bash code block. 
-            If you think the task is completely finished, output: \`\`\`bash\necho "DONE"\n\`\`\``,
-          });
-
-          // Extract bash command from code block, or fallback to full text
-          const codeBlockMatch = text.match(/\`\`\`(?:bash|sh)?\n([\s\S]*?)\`\`\`/);
-          const aiChosenCommand = (codeBlockMatch ? codeBlockMatch[1] : text).trim();
+        const generateAndStreamPlan = async (promptText: string) => {
+          let planText = '';
+          let lastUpdateTime = Date.now();
           
-          await this.addLog(taskId, 'info', `AI Reasoning: ${text.replace(/\`\`\`(?:bash|sh)?\n[\s\S]*?\`\`\`/, '').trim() || '(No reasoning provided)'}`);
-          await this.addLog(taskId, 'info', `> ${aiChosenCommand}`);
+          try {
+            const { textStream } = await streamText({
+              model: aiModel,
+              prompt: promptText,
+            });
 
-          const result = await this.dockerService.executeCommand(containerId!, aiChosenCommand);
-          await this.addLog(taskId, 'info', `Tool output: ${result.stdout.substring(0, 500)}${result.stdout.length > 500 ? '...' : ''}`);
-          
-          history += `Command: ${aiChosenCommand}\nOutput: ${result.stdout || result.stderr}\n\n`;
-
-          // For safety, we keep the loopCount limit. If the AI outputs DONE, we finish.
-          if (aiChosenCommand.includes('DONE') || loopCount >= 15) {
-            await this.addLog(taskId, 'success', `AI completed code modifications`);
-            isTaskComplete = true;
+            for await (const textPart of textStream) {
+              planText += textPart;
+              if (Date.now() - lastUpdateTime > 500) {
+                const updatedTaskPlan = await this.prisma.task.update({
+                  where: { id: taskId },
+                  data: { plan: planText, status: 'awaiting-approval' },
+                });
+                this.tasksGateway.emitTaskUpdated(taskId, updatedTaskPlan);
+                lastUpdateTime = Date.now();
+              }
+            }
+          } catch (error: any) {
+            console.error('[Agent] Plan generation error:', error);
+            throw new Error(`AI Plan Generation failed: ${error.message || 'Unknown error. Check API keys and balance.'}`);
           }
-        } catch (error) {
-          await this.addLog(taskId, 'error', `AI Generation failed: ${error.message}`);
-          break; // Exit the loop on failure
+
+          if (!planText || planText.trim().length === 0) {
+            throw new Error("AI provider returned an empty response. Please check your API keys or credit balance.");
+          }
+          
+          const finalUpdatedTaskPlan = await this.prisma.task.update({
+            where: { id: taskId },
+            data: { plan: planText, status: 'awaiting-approval' },
+          });
+          this.tasksGateway.emitTaskUpdated(taskId, finalUpdatedTaskPlan);
+        };
+
+        await generateAndStreamPlan(`You are an AI developer agent. The user wants you to: ${payload.instruction}.
+          Project language/framework: ${payload.meta?.language || 'Unknown'}.${workspaceContext}${attachmentsContext}
+          Based on this, output a step-by-step implementation plan. 
+          Format it nicely in Markdown. Do not include introductory text, just the plan.`);
+        
+        await this.addLog(taskId, 'info', `Waiting for user to approve the plan...`);
+
+        let planApproved = false;
+        while (!planApproved) {
+          await new Promise(r => setTimeout(r, 3000));
+          const currentTask = await this.prisma.task.findUnique({ where: { id: taskId } });
+          if (currentTask?.status === 'cancelled') {
+            await this.addLog(taskId, 'error', 'Task was cancelled by user');
+            return;
+          }
+          if (currentTask?.status === 'in-progress' || currentTask?.status === 'plan-approved') {
+            planApproved = true;
+            const uTask = await this.prisma.task.update({ where: { id: taskId }, data: { status: 'in-progress' } });
+            this.tasksGateway.emitTaskUpdated(taskId, uTask);
+          } else if (currentTask?.status === 'plan-rejected') {
+            await this.addLog(taskId, 'process', `Plan rejected. Re-generating based on feedback...`);
+            await generateAndStreamPlan(`You are an AI developer agent. The user wants you to: ${currentTask?.description}.
+              Output a step-by-step implementation plan. Do not include introductory text.`);
+            await this.addLog(taskId, 'info', `Waiting for user to approve the revised plan...`);
+          }
+        }
+        await this.addLog(taskId, 'success', `Plan approved! Commencing execution.`);
+
+        // Step 3: AI Loop
+        await this.addLog(taskId, 'process', `Sending instruction to ${payload.llm?.provider} (${payload.llm?.model})...`);
+        const currentTaskFinal = await this.prisma.task.findUnique({ where: { id: taskId } });
+        await this.addLog(taskId, 'info', `Instruction: "${currentTaskFinal?.description || payload.instruction}"`);
+
+        let isTaskComplete = false;
+        let loopCount = 0;
+
+        while (!isTaskComplete && loopCount < 15) {
+          const currentTaskLoop = await this.prisma.task.findUnique({ where: { id: taskId } });
+          if (currentTaskLoop?.status === 'cancelled') {
+            await this.addLog(taskId, 'error', 'Task was cancelled by user');
+            return;
+          }
+
+          loopCount++;
+          await this.addLog(taskId, 'process', `AI thinking... (iteration ${loopCount})`);
+
+          try {
+            const { text } = await generateText({
+              model: aiModel,
+              prompt: `You are an elite, Senior 10x Developer AI. The user wants you to: ${payload.instruction}.
+              Project language/framework: ${payload.meta?.language || 'Unknown (inspect first)'}.
+              ${projectTypeContext}
+              
+              CONSTITUTION & CRITICAL RULES:
+              1. BEFORE writing any code, you MUST explore the codebase (using 'ls', 'cat', 'find', etc.) to understand the existing architecture, file structure, and what technology stack is being used.
+              2. If the project is a Node.js project with a frontend framework (Next.js, React, etc.), create the appropriate framework components (.tsx, .jsx, etc.) and integrate them into the existing routing and layout. Do NOT create standalone .html files.
+              3. If the project is a STATIC HTML/CSS/JS site (no package.json), edit the .html, .css, and .js files directly. Do NOT create package.json or try to use npm.
+              4. NEVER use placeholder code (e.g. "// insert logic here"). Always write complete, production-ready code.
+              5. ALWAYS verify your code before marking the task as DONE. For Node.js projects, run 'npm run build'. For static HTML, verify file paths are correct. For Python, run the relevant checks.
+              6. If there is a package.json, inspect it for essential scripts (migrations, seeding, etc.) and intelligently run those commands if the task requires them.${workspaceContext}
+              
+              Past actions and outputs:
+              ${history}
+              
+              We are in iteration ${loopCount} (Max 15). 
+              CHAIN OF THOUGHT:
+              First, briefly think step-by-step in English about what you are going to do and why.
+              Then, provide a SINGLE bash command to execute in the workspace to make progress on this task.
+              You MUST place your bash command inside a \`\`\`bash code block. 
+              If you think the task is completely finished, output: \`\`\`bash\necho "DONE"\n\`\`\``,
+            });
+
+            // Extract bash command from code block, or fallback to full text
+            const codeBlockMatch = text.match(/\`\`\`(?:bash|sh)?\n([\s\S]*?)\`\`\`/);
+            const aiChosenCommand = (codeBlockMatch ? codeBlockMatch[1] : text).trim();
+            
+            await this.addLog(taskId, 'info', `AI Reasoning: ${text.replace(/\`\`\`(?:bash|sh)?\n[\s\S]*?\`\`\`/, '').trim() || '(No reasoning provided)'}`);
+            await this.addLog(taskId, 'info', `> ${aiChosenCommand}`);
+
+            const result = await this.dockerService.executeCommand(containerId!, aiChosenCommand);
+            await this.addLog(taskId, 'info', `Tool output: ${result.stdout.substring(0, 500)}${result.stdout.length > 500 ? '...' : ''}`);
+            
+            history += `Command: ${aiChosenCommand}\nOutput: ${result.stdout || result.stderr}\n\n`;
+
+            // For safety, we keep the loopCount limit. If the AI outputs DONE, we finish.
+            if (aiChosenCommand.includes('DONE') || loopCount >= 15) {
+              await this.addLog(taskId, 'success', `AI completed code modifications`);
+              isTaskComplete = true;
+            }
+          } catch (error) {
+            await this.addLog(taskId, 'error', `AI Generation failed: ${error.message}`);
+            break; // Exit the loop on failure
+          }
         }
       }
 
@@ -476,70 +502,77 @@ export class AgentService {
       const updatedDiffTask = await this.prisma.task.update({ where: { id: taskId }, data: { diff: diffResult.stdout } });
       this.tasksGateway.emitTaskUpdated(taskId, updatedDiffTask);
 
-      // Adaptive Build Retry: re-enter AI loop on build failure, up to 2 retries
-      // Adaptive build step based on project type
-      if (projectType === 'node') {
-        let buildRetryCount = 0;
-        const maxBuildRetries = 2;
-        let buildSucceeded = false;
+      // Skip build entirely if no code changes were made
+      const hasCodeChanges = diffResult.stdout.trim().length > 0;
 
-        while (!buildSucceeded && buildRetryCount <= maxBuildRetries) {
-          await this.addLog(taskId, 'process', buildRetryCount === 0 ? 'Running build...' : `Running build (retry ${buildRetryCount}/${maxBuildRetries})...`);
-          const buildResult = await this.dockerService.executeCommand(containerId!, `cd ${primaryTargetDir} && npm run build`);
-          await new Promise(resolve => setTimeout(resolve, 1000));
+      if (!hasCodeChanges) {
+        await this.addLog(taskId, 'success', '✓ No code changes detected — skipping build step');
+      } else {
+        // Adaptive Build Retry: re-enter AI loop on build failure, up to 2 retries
+        // Adaptive build step based on project type
+        if (projectType === 'node') {
+          let buildRetryCount = 0;
+          const maxBuildRetries = 2;
+          let buildSucceeded = false;
 
-          const buildFailed = buildResult.stderr && (
-            buildResult.stderr.toLowerCase().includes('error') ||
-            buildResult.stderr.includes('ERR')
-          );
+          while (!buildSucceeded && buildRetryCount <= maxBuildRetries) {
+            await this.addLog(taskId, 'process', buildRetryCount === 0 ? 'Running build...' : `Running build (retry ${buildRetryCount}/${maxBuildRetries})...`);
+            const buildResult = await this.dockerService.executeCommand(containerId!, `cd ${primaryTargetDir} && npm run build`);
+            await new Promise(resolve => setTimeout(resolve, 1000));
 
-          if (!buildFailed) {
-            await this.addLog(taskId, 'success', '✓ Build completed successfully');
-            buildSucceeded = true;
-          } else if (buildRetryCount < maxBuildRetries) {
-            buildRetryCount++;
-            const buildError = buildResult.stderr.substring(0, 1500);
-            await this.addLog(taskId, 'error', `Build failed. Re-entering AI loop to fix (retry ${buildRetryCount}/${maxBuildRetries})...`);
-            await this.addLog(taskId, 'info', `Build error: ${buildError.substring(0, 500)}${buildError.length > 500 ? '...' : ''}`);
+            const buildFailed = buildResult.stderr && (
+              buildResult.stderr.toLowerCase().includes('error') ||
+              buildResult.stderr.includes('ERR')
+            );
 
-            // Re-enter AI loop with build error context (up to 5 iterations)
-            let fixLoopCount = 0;
-            let fixComplete = false;
-            while (!fixComplete && fixLoopCount < 5) {
-              fixLoopCount++;
-              await this.addLog(taskId, 'process', `AI fixing build error... (fix iteration ${fixLoopCount})`);
-              try {
-                const { text } = await generateText({
-                  model: aiModel,
-                  prompt: `You are an AI developer agent. The project failed to build with the following error:\n\n${buildError}\n\nThe user's original task was: ${payload.instruction}.\nProject language/framework: ${payload.meta?.language || 'Unknown'}.\n\nPast actions and outputs:\n${history}\n\nFix iteration ${fixLoopCount} of 5. Output a SINGLE bash command to fix the build error.\nDo not include markdown formatting or backticks, just the raw bash command.\nIf you believe the fix is complete, output: echo \"DONE\"`,
-                });
+            if (!buildFailed) {
+              await this.addLog(taskId, 'success', '✓ Build completed successfully');
+              buildSucceeded = true;
+            } else if (buildRetryCount < maxBuildRetries) {
+              buildRetryCount++;
+              const buildError = buildResult.stderr.substring(0, 1500);
+              await this.addLog(taskId, 'error', `Build failed. Re-entering AI loop to fix (retry ${buildRetryCount}/${maxBuildRetries})...`);
+              await this.addLog(taskId, 'info', `Build error: ${buildError.substring(0, 500)}${buildError.length > 500 ? '...' : ''}`);
 
-                const fixCommand = text.trim();
-                await this.addLog(taskId, 'info', `> ${fixCommand}`);
+              // Re-enter AI loop with build error context (up to 5 iterations)
+              let fixLoopCount = 0;
+              let fixComplete = false;
+              while (!fixComplete && fixLoopCount < 5) {
+                fixLoopCount++;
+                await this.addLog(taskId, 'process', `AI fixing build error... (fix iteration ${fixLoopCount})`);
+                try {
+                  const { text } = await generateText({
+                    model: aiModel,
+                    prompt: `You are an AI developer agent. The project failed to build with the following error:\n\n${buildError}\n\nThe user's original task was: ${payload.instruction}.\nProject language/framework: ${payload.meta?.language || 'Unknown'}.\n\nPast actions and outputs:\n${history}\n\nFix iteration ${fixLoopCount} of 5. Output a SINGLE bash command to fix the build error.\nDo not include markdown formatting or backticks, just the raw bash command.\nIf you believe the fix is complete, output: echo \"DONE\"`,
+                  });
 
-                if (fixCommand.includes('DONE')) {
-                  fixComplete = true;
+                  const fixCommand = text.trim();
+                  await this.addLog(taskId, 'info', `> ${fixCommand}`);
+
+                  if (fixCommand.includes('DONE')) {
+                    fixComplete = true;
+                    break;
+                  }
+
+                  const fixResult = await this.dockerService.executeCommand(containerId!, fixCommand);
+                  await this.addLog(taskId, 'info', `Tool output: ${fixResult.stdout.substring(0, 500)}${fixResult.stdout.length > 500 ? '...' : ''}`);
+                  history += `Command: ${fixCommand}\nOutput: ${fixResult.stdout || fixResult.stderr}\n\n`;
+                } catch (error) {
+                  await this.addLog(taskId, 'error', `AI fix generation failed: ${error.message}`);
                   break;
                 }
-
-                const fixResult = await this.dockerService.executeCommand(containerId!, fixCommand);
-                await this.addLog(taskId, 'info', `Tool output: ${fixResult.stdout.substring(0, 500)}${fixResult.stdout.length > 500 ? '...' : ''}`);
-                history += `Command: ${fixCommand}\nOutput: ${fixResult.stdout || fixResult.stderr}\n\n`;
-              } catch (error) {
-                await this.addLog(taskId, 'error', `AI fix generation failed: ${error.message}`);
-                break;
               }
+            } else {
+              throw new Error(`Build failed after ${maxBuildRetries} retries. Aborting task to prevent pushing broken code to the repository.`);
             }
-          } else {
-            throw new Error(`Build failed after ${maxBuildRetries} retries. Aborting task to prevent pushing broken code to the repository.`);
           }
+        } else if (projectType === 'static') {
+          await this.addLog(taskId, 'success', '✓ Static HTML project — no build step needed');
+        } else if (projectType === 'python') {
+          await this.addLog(taskId, 'success', '✓ Python project — no build step needed');
+        } else {
+          await this.addLog(taskId, 'info', 'Unknown project type — skipping build step');
         }
-      } else if (projectType === 'static') {
-        await this.addLog(taskId, 'success', '✓ Static HTML project — no build step needed');
-      } else if (projectType === 'python') {
-        await this.addLog(taskId, 'success', '✓ Python project — no build step needed');
-      } else {
-        await this.addLog(taskId, 'info', 'Unknown project type — skipping build step');
       }
 
       // Step 5: Await User Review
