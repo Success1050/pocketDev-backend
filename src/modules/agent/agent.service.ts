@@ -460,17 +460,28 @@ export class AgentService {
       // Live Preview (Docker Port Mapping — no tunneling needed!)
       await this.addLog(taskId, 'process', 'Spinning up live preview...');
       
-      // Extract backend domain from config to avoid localhost on remote servers
+      // Extract backend domain and protocol from config to match SSL/HTTP setup
       const callbackUrl = this.configService.get<string>('GITHUB_CALLBACK_URL') || 'http://localhost';
       let backendDomain = 'localhost';
-      try { backendDomain = new URL(callbackUrl).hostname; } catch(e) {}
+      let protocol = 'http';
+      try {
+        const parsedUrl = new URL(callbackUrl);
+        backendDomain = parsedUrl.hostname;
+        if (parsedUrl.protocol.startsWith('https')) {
+          protocol = 'https';
+        }
+      } catch(e) {}
+
+      if (process.env.PREVIEW_PROTOCOL) {
+        protocol = process.env.PREVIEW_PROTOCOL;
+      }
 
       let secondaryUrlStr = '';
-      let primaryUrlStr = `http://${backendDomain}:${primaryHostPort}`;
+      let primaryUrlStr = `${protocol}://${backendDomain}:${primaryHostPort}`;
       const secondaryDir = payload.secondaryRepo?.name || 'secondary-repo';
       
       if (hasSecondaryRepo) {
-        secondaryUrlStr = `http://${backendDomain}:${secondaryHostPort}`;
+        secondaryUrlStr = `${protocol}://${backendDomain}:${secondaryHostPort}`;
         
         // Bi-directional Injection: Cross-wire both repos
         await this.dockerService.executeCommand(containerId!, `cd ${primaryTargetDir} && echo -e "NEXT_PUBLIC_API_URL=${secondaryUrlStr}\\nREACT_APP_API_URL=${secondaryUrlStr}\\nVITE_API_URL=${secondaryUrlStr}\\nAPI_URL=${secondaryUrlStr}" >> .env.local`);
