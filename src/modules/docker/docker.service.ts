@@ -55,6 +55,7 @@ export class DockerService {
         AutoRemove: true,
         Binds: ['pocketdev_npm_cache:/root/.npm'],
         PortBindings,
+        ExtraHosts: ['host.docker.internal:host-gateway']
       }
     });
 

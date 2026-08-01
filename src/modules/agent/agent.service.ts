@@ -226,8 +226,15 @@ export class AgentService {
 
       let attachmentsContext = '';
       if (payload.attachments && payload.attachments.length > 0) {
-        const internalUrls = payload.attachments.map(a => a.replace('localhost', 'host.docker.internal').replace('127.0.0.1', 'host.docker.internal'));
-        attachmentsContext = `\n\nATTACHMENTS: The user has uploaded the following files. They are hosted at these internal URLs:\n${internalUrls.map(a => `- ${a}`).join('\n')}\nCRITICAL: If these are images to be used in the project, you MUST use wget or curl to download them into the project's public/assets directory, and then reference the local file paths in your code. DO NOT hotlink these URLs directly in the code because they are internal network URLs that will break on production!`;
+        const fileNames = [];
+        for (const fileUrl of payload.attachments) {
+          const fileName = fileUrl.split('/').pop() || 'upload.png';
+          fileNames.push(fileName);
+          // Auto-download into the container
+          const fixedUrl = fileUrl.replace('localhost', 'host.docker.internal').replace('127.0.0.1', 'host.docker.internal');
+          await this.dockerService.executeCommand(containerId!, `cd ${primaryTargetDir} && wget -qO "${fileName}" "${fixedUrl}"`);
+        }
+        attachmentsContext = `\n\nATTACHMENTS: The user has uploaded files which have been automatically downloaded into the root directory of your primary repository. The files are:\n${fileNames.map(f => `- ${f}`).join('\n')}\nCRITICAL: You MUST move these files to the appropriate assets directory (e.g. 'public/' or 'src/assets/' depending on the framework) and reference their local file paths in your code. DO NOT hotlink URLs directly!`;
       }
 
       const workspaceContext = hasSecondaryRepo 
@@ -633,8 +640,14 @@ export class AgentService {
         
       let attachmentsContext = '';
       if (attachments && attachments.length > 0) {
-        const internalUrls = attachments.map(a => a.replace('localhost', 'host.docker.internal').replace('127.0.0.1', 'host.docker.internal'));
-        attachmentsContext = `\n\nATTACHMENTS: The user has uploaded the following files for this refinement. They are hosted at these internal URLs:\n${internalUrls.map(a => `- ${a}`).join('\n')}\nCRITICAL: If these are images to be used in the project, you MUST use wget or curl to download them into the project's public/assets directory, and then reference the local file paths in your code. DO NOT hotlink these URLs directly in the code because they are internal network URLs that will break on production!`;
+        const fileNames = [];
+        for (const fileUrl of attachments) {
+          const fileName = fileUrl.split('/').pop() || 'upload.png';
+          fileNames.push(fileName);
+          const fixedUrl = fileUrl.replace('localhost', 'host.docker.internal').replace('127.0.0.1', 'host.docker.internal');
+          await this.dockerService.executeCommand(task.containerId!, `cd ${primaryTargetDir} && wget -qO "${fileName}" "${fixedUrl}"`);
+        }
+        attachmentsContext = `\n\nATTACHMENTS: The user has uploaded files for this refinement which have been automatically downloaded into the root directory of your primary repository. The files are:\n${fileNames.map(f => `- ${f}`).join('\n')}\nCRITICAL: You MUST move these files to the appropriate assets directory (e.g. 'public/' or 'src/assets/' depending on the framework) and reference their local file paths in your code. DO NOT hotlink URLs directly!`;
       }
         
       let isTaskComplete = false;
