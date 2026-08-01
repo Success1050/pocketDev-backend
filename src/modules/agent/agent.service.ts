@@ -476,12 +476,21 @@ export class AgentService {
         protocol = process.env.PREVIEW_PROTOCOL;
       }
 
+      const isLocalhost = backendDomain === 'localhost' || backendDomain === '127.0.0.1';
+      const useSubdomain = process.env.PREVIEW_USE_SUBDOMAIN !== undefined 
+        ? process.env.PREVIEW_USE_SUBDOMAIN === 'true'
+        : (!isLocalhost && protocol === 'https');
+
       let secondaryUrlStr = '';
-      let primaryUrlStr = `${protocol}://${backendDomain}:${primaryHostPort}`;
+      let primaryUrlStr = useSubdomain 
+        ? `${protocol}://${primaryHostPort}.${backendDomain}` 
+        : `${protocol}://${backendDomain}:${primaryHostPort}`;
       const secondaryDir = payload.secondaryRepo?.name || 'secondary-repo';
       
       if (hasSecondaryRepo) {
-        secondaryUrlStr = `${protocol}://${backendDomain}:${secondaryHostPort}`;
+        secondaryUrlStr = useSubdomain 
+          ? `${protocol}://${secondaryHostPort}.${backendDomain}` 
+          : `${protocol}://${backendDomain}:${secondaryHostPort}`;
         
         // Bi-directional Injection: Cross-wire both repos
         await this.dockerService.executeCommand(containerId!, `cd ${primaryTargetDir} && echo -e "NEXT_PUBLIC_API_URL=${secondaryUrlStr}\\nREACT_APP_API_URL=${secondaryUrlStr}\\nVITE_API_URL=${secondaryUrlStr}\\nAPI_URL=${secondaryUrlStr}" >> .env.local`);
