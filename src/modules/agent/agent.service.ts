@@ -226,7 +226,7 @@ export class AgentService {
 
       let attachmentsContext = '';
       if (payload.attachments && payload.attachments.length > 0) {
-        const fileNames = [];
+        const fileNames: string[] = [];
         for (const fileUrl of payload.attachments) {
           const fileName = fileUrl.split('/').pop() || 'upload.png';
           fileNames.push(fileName);
@@ -422,12 +422,17 @@ export class AgentService {
       // Live Preview (Docker Port Mapping — no tunneling needed!)
       await this.addLog(taskId, 'process', 'Spinning up live preview...');
       
+      // Extract backend domain from config to avoid localhost on remote servers
+      const callbackUrl = this.configService.get<string>('GITHUB_CALLBACK_URL') || 'http://localhost';
+      let backendDomain = 'localhost';
+      try { backendDomain = new URL(callbackUrl).hostname; } catch(e) {}
+
       let secondaryUrlStr = '';
-      let primaryUrlStr = `http://localhost:${primaryHostPort}`;
+      let primaryUrlStr = `http://${backendDomain}:${primaryHostPort}`;
       const secondaryDir = payload.secondaryRepo?.name || 'secondary-repo';
       
       if (hasSecondaryRepo) {
-        secondaryUrlStr = `http://localhost:${secondaryHostPort}`;
+        secondaryUrlStr = `http://${backendDomain}:${secondaryHostPort}`;
         
         // Bi-directional Injection: Cross-wire both repos
         await this.dockerService.executeCommand(containerId!, `cd ${primaryTargetDir} && echo -e "NEXT_PUBLIC_API_URL=${secondaryUrlStr}\\nREACT_APP_API_URL=${secondaryUrlStr}\\nVITE_API_URL=${secondaryUrlStr}\\nAPI_URL=${secondaryUrlStr}" >> .env.local`);
@@ -443,7 +448,8 @@ export class AgentService {
       // Wait for dev server to boot
       await new Promise(r => setTimeout(r, 5000));
       
-      await this.prisma.task.update({ where: { id: taskId }, data: { previewUrl: primaryUrlStr } });
+      const updatedPreviewTask = await this.prisma.task.update({ where: { id: taskId }, data: { previewUrl: primaryUrlStr } });
+      this.tasksGateway.emitTaskUpdated(taskId, updatedPreviewTask);
       const logMsg = hasSecondaryRepo ? `Live preview available at: ${primaryUrlStr} (Secondary: ${secondaryUrlStr})` : `Live preview available at: ${primaryUrlStr}`;
       await this.addLog(taskId, 'info', logMsg);
 
@@ -455,7 +461,8 @@ export class AgentService {
       // Use git add -A first then git diff --cached to capture ALL changes (new files, staged, modified)
       await this.dockerService.executeCommand(containerId!, `cd ${primaryTargetDir} && git add -A`);
       const diffResult = await this.dockerService.executeCommand(containerId!, `cd ${primaryTargetDir} && git diff --cached`);
-      await this.prisma.task.update({ where: { id: taskId }, data: { diff: diffResult.stdout } });
+      const updatedDiffTask = await this.prisma.task.update({ where: { id: taskId }, data: { diff: diffResult.stdout } });
+      this.tasksGateway.emitTaskUpdated(taskId, updatedDiffTask);
 
       // Adaptive Build Retry: re-enter AI loop on build failure, up to 2 retries
       // Adaptive build step based on project type
@@ -524,10 +531,11 @@ export class AgentService {
       }
 
       // Step 5: Await User Review
-      await this.prisma.task.update({
+      const awaitingReviewTask = await this.prisma.task.update({
         where: { id: taskId },
         data: { status: 'awaiting-review', logs: 'Build successful, waiting for review' },
       });
+      this.tasksGateway.emitTaskUpdated(taskId, awaitingReviewTask);
       await this.addLog(taskId, 'success', `🎉 Changes are ready for review! Live preview is active.`);
       taskSuccess = true;
 
@@ -640,12 +648,12 @@ export class AgentService {
         
       let attachmentsContext = '';
       if (attachments && attachments.length > 0) {
-        const fileNames = [];
+        const fileNames: string[] = [];
         for (const fileUrl of attachments) {
           const fileName = fileUrl.split('/').pop() || 'upload.png';
           fileNames.push(fileName);
           const fixedUrl = fileUrl.replace('localhost', 'host.docker.internal').replace('127.0.0.1', 'host.docker.internal');
-          await this.dockerService.executeCommand(task.containerId!, `cd ${primaryTargetDir} && wget -qO "${fileName}" "${fixedUrl}"`);
+          await this.dockerService.executeCommand(containerId, `cd ${primaryTargetDir} && wget -qO "${fileName}" "${fixedUrl}"`);
         }
         attachmentsContext = `\n\nATTACHMENTS: The user has uploaded files for this refinement which have been automatically downloaded into the root directory of your primary repository. The files are:\n${fileNames.map(f => `- ${f}`).join('\n')}\nCRITICAL: You MUST move these files to the appropriate assets directory (e.g. 'public/' or 'src/assets/' depending on the framework) and reference their local file paths in your code. DO NOT hotlink URLs directly!`;
       }
