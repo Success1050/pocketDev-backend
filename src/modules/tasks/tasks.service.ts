@@ -182,6 +182,17 @@ export class TasksService {
   }
 
   async refineTask(taskId: string, instruction: string, attachments?: string[]) {
+    // Check if user's tier allows refinement
+    const task = await this.prisma.task.findUnique({ where: { id: taskId }, include: { user: true } });
+    if (task?.user) {
+      const tier = (task.user.tier || 'free') as UserTier;
+      if (!this.usageService.isFeatureAllowed('refine', tier)) {
+        throw new ForbiddenException(
+          'Refinements are not available on the Free plan. Please upgrade to Premium or Pro to refine AI-generated code.'
+        );
+      }
+    }
+
     // This runs asynchronously
     this.agentService.refineTask(taskId, instruction, attachments).catch(err => {
       this.logger.error(`Failed to refine task ${taskId}`, err);

@@ -729,6 +729,7 @@ export class AgentService {
       let isTaskComplete = false;
       let loopCount = 0;
       let history = '';
+      let hasFailed = false;
       
       while (!isTaskComplete && loopCount < 10) {
         loopCount++;
@@ -779,17 +780,28 @@ export class AgentService {
              break;
           }
         } catch (error) {
-          await this.addLog(taskId, 'error', `AI execution failed: ${error.message}`);
+          const errMsg = error?.message || String(error);
+          const userMsg = errMsg.includes('model') 
+            ? `The AI model encountered an error. This may be a temporary API issue. Please try again.`
+            : `AI execution error: ${errMsg.substring(0, 200)}`;
+          await this.addLog(taskId, 'error', userMsg);
+          hasFailed = true;
           break;
         }
       }
       
-      // Re-generate diff after refinement
-      await this.addLog(taskId, 'process', 'Generating updated code diff...');
-      await this.dockerService.executeCommand(containerId!, `cd ${primaryTargetDir} && git add -A`);
-      const diffResult = await this.dockerService.executeCommand(containerId!, `cd ${primaryTargetDir} && git diff --cached`);
-      await this.updateTaskAndEmit(taskId, { diff: diffResult.stdout, status: 'awaiting-review' });
-      await this.addLog(taskId, 'success', `Refinement complete. Waiting for review.`);
+      if (hasFailed) {
+        // Don't overwrite the diff or claim success — retain previous state
+        await this.updateTaskAndEmit(taskId, { status: 'awaiting-review' });
+        await this.addLog(taskId, 'warning', 'Refinement encountered an error. Your previous code is still intact for review.');
+      } else {
+        // Re-generate diff after successful refinement
+        await this.addLog(taskId, 'process', 'Generating updated code diff...');
+        await this.dockerService.executeCommand(containerId!, `cd ${primaryTargetDir} && git add -A`);
+        const diffResult = await this.dockerService.executeCommand(containerId!, `cd ${primaryTargetDir} && git diff --cached`);
+        await this.updateTaskAndEmit(taskId, { diff: diffResult.stdout, status: 'awaiting-review' });
+        await this.addLog(taskId, 'success', `Refinement complete. Waiting for review.`);
+      }
       
     } catch (e: any) {
       await this.addLog(taskId, 'error', `Failed to refine task: ${e.message}`);
