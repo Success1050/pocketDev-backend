@@ -20,9 +20,29 @@ export class AgentService {
   ) { }
 
   private getModel(providerName?: string, modelName?: string) {
-    const model = modelName || 'claude-haiku-4-5-20251001';
-    const anthropic = createAnthropic({ apiKey: this.configService.get<string>('ANTHROPIC_API_KEY') });
-    return anthropic(model);
+    const rawModel = modelName || 'claude-haiku-4-5-20251001';
+    
+    // Robust mapping for Anthropic API model identifiers & aliases
+    const MODEL_MAP: Record<string, string> = {
+      'claude-haiku-4-5-20251001': 'claude-haiku-4-5-20251001',
+      'claude-haiku-4-5': 'claude-haiku-4-5',
+      'claude-sonnet-5': 'claude-sonnet-5',
+      'claude-opus-5': 'claude-opus-5',
+      'claude-fable-5': 'claude-fable-5',
+      // Legacy / fallback mappings
+      'claude-haiku-4-5-20250414': 'claude-haiku-4-5-20251001',
+      'claude-sonnet-4-5-20250929': 'claude-sonnet-5',
+      'claude-sonnet-4-5-20250514': 'claude-sonnet-5',
+      'claude-opus-4-6': 'claude-opus-5',
+      'claude-opus-4-6-20250616': 'claude-opus-5',
+      'claude-opus-4-5-20251101': 'claude-opus-5',
+      'claude-opus-4-1-20250520': 'claude-opus-5',
+    };
+
+    const resolvedModel = MODEL_MAP[rawModel] || rawModel;
+    const apiKey = this.configService.get<string>('ANTHROPIC_API_KEY')?.trim();
+    const anthropic = createAnthropic({ apiKey });
+    return anthropic(resolvedModel);
   }
 
   getActiveContainers() {
@@ -36,9 +56,9 @@ export class AgentService {
   async getAvailableModels(userTier: UserTier = 'free') {
     const MODEL_WHITELIST = [
       { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku 4.5', tier: 'free' },
-      { id: 'claude-sonnet-4-5-20250929', name: 'Claude Sonnet 4.5', tier: 'premium' },
-      { id: 'claude-opus-4-6', name: 'Claude Opus 4.6', tier: 'pro' },
-      { id: 'claude-opus-4-5-20251101', name: 'Claude Opus 4.5', tier: 'pro' },
+      { id: 'claude-sonnet-5', name: 'Claude Sonnet 5', tier: 'premium' },
+      { id: 'claude-opus-5', name: 'Claude Opus 5', tier: 'pro' },
+      { id: 'claude-fable-5', name: 'Claude Fable 5', tier: 'pro' },
     ];
 
     let apiModels: any[] = [];
@@ -319,11 +339,14 @@ export class AgentService {
             }
           } catch (error: any) {
             console.error('[Agent] Plan generation error:', error);
-            throw new Error(`AI Plan Generation failed: ${error.message || 'Unknown error. Check API keys and balance.'}`);
+            const detailedMsg = error?.message || error?.toString() || 'Unknown API error';
+            await this.addLog(taskId, 'error', `AI Plan Generation Error: ${detailedMsg}`);
+            throw new Error(`AI Plan Generation failed: ${detailedMsg}`);
           }
 
           if (!planText || planText.trim().length === 0) {
-            throw new Error("AI provider returned an empty response. Please check your API keys or credit balance.");
+            await this.addLog(taskId, 'error', `AI provider returned empty response. Check ANTHROPIC_API_KEY on server.`);
+            throw new Error("AI provider returned an empty response. Please check your API key or credit balance.");
           }
           
           const finalUpdatedTaskPlan = await this.prisma.task.update({

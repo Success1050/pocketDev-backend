@@ -73,6 +73,11 @@ export class UsageService {
   isModelAllowedForTier(modelId: string, tier: UserTier): boolean {
     const modelTierMap: Record<string, UserTier[]> = {
       'claude-haiku-4-5-20251001': ['free', 'premium', 'pro'],
+      'claude-haiku-4-5': ['free', 'premium', 'pro'],
+      'claude-sonnet-5': ['premium', 'pro'],
+      'claude-opus-5': ['pro'],
+      'claude-fable-5': ['pro'],
+      // Legacy fallback mapping support
       'claude-sonnet-4-5-20250929': ['premium', 'pro'],
       'claude-opus-4-6': ['pro'],
       'claude-opus-4-5-20251101': ['pro'],
