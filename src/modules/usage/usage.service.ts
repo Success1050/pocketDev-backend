@@ -72,10 +72,10 @@ export class UsageService {
 
   isModelAllowedForTier(modelId: string, tier: UserTier): boolean {
     const modelTierMap: Record<string, UserTier[]> = {
-      'claude-haiku-4-5-20250414': ['free', 'premium', 'pro'],
-      'claude-sonnet-4-5-20250514': ['premium', 'pro'],
-      'claude-opus-4-6-20250616': ['pro'],
-      'claude-opus-4-1-20250520': ['pro'],
+      'claude-haiku-4-5-20251001': ['free', 'premium', 'pro'],
+      'claude-sonnet-4-5-20250929': ['premium', 'pro'],
+      'claude-opus-4-6': ['pro'],
+      'claude-opus-4-5-20251101': ['pro'],
     };
     const allowedTiers = modelTierMap[modelId];
     if (!allowedTiers) return false; // Model not in whitelist

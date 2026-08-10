@@ -20,7 +20,7 @@ export class AgentService {
   ) { }
 
   private getModel(providerName?: string, modelName?: string) {
-    const model = modelName || 'claude-3-5-sonnet-20240620';
+    const model = modelName || 'claude-haiku-4-5-20251001';
     const anthropic = createAnthropic({ apiKey: this.configService.get<string>('ANTHROPIC_API_KEY') });
     return anthropic(model);
   }
@@ -35,10 +35,10 @@ export class AgentService {
 
   async getAvailableModels(userTier: UserTier = 'free') {
     const MODEL_WHITELIST = [
-      { id: 'claude-haiku-4-5-20250414', name: 'Claude Haiku 4.5', tier: 'free' },
-      { id: 'claude-sonnet-4-5-20250514', name: 'Claude Sonnet 4.5', tier: 'premium' },
-      { id: 'claude-opus-4-6-20250616', name: 'Claude Opus 4.6', tier: 'pro' },
-      { id: 'claude-opus-4-1-20250520', name: 'Claude Opus 4.1', tier: 'pro' },
+      { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku 4.5', tier: 'free' },
+      { id: 'claude-sonnet-4-5-20250929', name: 'Claude Sonnet 4.5', tier: 'premium' },
+      { id: 'claude-opus-4-6', name: 'Claude Opus 4.6', tier: 'pro' },
+      { id: 'claude-opus-4-5-20251101', name: 'Claude Opus 4.5', tier: 'pro' },
     ];
 
     let apiModels: any[] = [];
