@@ -69,12 +69,13 @@ export class TasksService {
 
       this.logger.log(`Task ${task.id} enqueued — job: ${jobId}, bgJob: ${backgroundJobId}`);
     } catch (error) {
-      // If Redis/queue is unavailable, fall back to direct processing
-      this.logger.warn(`Queue unavailable, falling back to direct processing: ${error.message}`);
-      this.agentService.processTask(task.id, payload).catch(err => {
-        this.logger.error('Direct task processing failed', err);
-      });
+      this.logger.warn(`Queue unavailable, proceeding with direct processing: ${error.message}`);
     }
+
+    // Always initiate execution immediately so the task starts without getting stuck on 'queued'
+    this.agentService.processTask(task.id, payload).catch(err => {
+      this.logger.error('Task execution failed', err);
+    });
 
     await this.usageService.incrementTaskCount(userId);
 

@@ -205,9 +205,9 @@ export class AgentService {
         return;
       }
 
-      // Prevent automatic restart of cancelled tasks
-      if (task.status === 'cancelled') {
-        console.log(`[Agent] Task ${taskId} is cancelled. Aborting.`);
+      // Prevent duplicate or automatic restart of running/cancelled tasks
+      if (task.status === 'cancelled' || task.status === 'in-progress' || task.status === 'completed') {
+        console.log(`[Agent] Task ${taskId} is already status '${task.status}'. Aborting duplicate execution.`);
         return;
       }
 
