@@ -1,98 +1,159 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# ⚡ PocketDev Backend — Autonomous AI Software Engineering Engine
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+[![NestJS](https://img.shields.io/badge/NestJS-E0234E?style=for-the-badge&logo=nestjs&logoColor=white)](https://nestjs.com/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-007ACC?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Prisma](https://img.shields.io/badge/Prisma-2D3748?style=for-the-badge&logo=prisma&logoColor=white)](https://www.prisma.io/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-316192?style=for-the-badge&logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![Docker](https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://www.docker.com/)
+[![Anthropic](https://img.shields.io/badge/Anthropic_Claude-D97706?style=for-the-badge&logo=anthropic&logoColor=white)](https://www.anthropic.com/)
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+**PocketDev Backend** is the high-performance, asynchronous orchestration server powering the PocketDev platform. Built on **NestJS**, **Docker**, **Prisma (PostgreSQL)**, and the **Anthropic Claude API**, it enables developers to build, test, and ship code directly to GitHub repositories from mobile and web apps without opening a laptop.
 
-## Description
+---
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+## 🌟 Key Capabilities & Features
 
-## Project setup
+- 🤖 **Multi-Model AI Orchestrator**: Integrated with Anthropic's Claude 5 & 4.5 family (Claude Haiku 4.5, Sonnet 5, Opus 5, Fable 5) using the Vercel AI SDK.
+- 🐳 **Isolated Docker Workspaces**: Dynamically spins up isolated Linux Docker containers for every task to clone GitHub repos, run package managers (`npm`, `pip`, `cargo`, etc.), execute bash commands, and host live preview servers.
+- 📋 **Two-Step AI Agent Architecture**:
+  1. **Planning Phase**: Analyzes repo file structure and dynamic project setup strategy, streaming a structured Markdown plan via WebSockets.
+  2. **Autonomous Execution Phase**: Iteratively executes bash commands (up to 10 loops) inside Docker containers, reading outputs and adjusting code dynamically.
+- 🔀 **Multi-Repo (Dual Workspace) Editing**: Edit both a primary repository (e.g. Next.js frontend) and secondary repository (e.g. NestJS backend) simultaneously within a unified cloud workspace.
+- 💰 **Tiered Monetization & Quota Engine**: Enforces Monthly Task and Token Quotas for **Free**, **Premium ($9.99/mo)**, and **Pro ($24.99/mo)** tiers.
+- 💳 **Webhook Integrations**: Automated subscription management via **Lemon Squeezy** (web) and **RevenueCat** (mobile).
+- ⚡ **Real-Time Streaming**: **Socket.io Gateways** for live WebSocket log streaming and interactive plan updates.
+- 🔔 **Asynchronous Push Notifications**: Background job processing via **BullMQ & Redis** with push notifications sent via Expo Push Service upon task completion.
 
-```bash
-$ yarn install
+---
+
+## 🏗️ System Architecture & Workflow
+
+```
+               ┌────────────────────────────────────────────────────────┐
+               │    Client Applications (Web Next.js / Mobile Expo)      │
+               └───────────────────────────┬────────────────────────────┘
+                                           │ HTTP / WebSockets (Socket.io)
+                                           ▼
+               ┌────────────────────────────────────────────────────────┐
+               │             NestJS Backend (PocketDev Engine)          │
+               └───────┬───────────────────┬───────────────────┬────────┘
+                       │                   │                   │
+        ┌──────────────┴──────┐  ┌─────────┴─────────┐  ┌──────┴──────────────┐
+        │  Prisma / PostgreSQL│  │ Anthropic AI SDK  │  │   Docker Engine    │
+        │   (Neon Cloud DB)   │  │ (Claude 5/4.5)    │  │ (Isolated Containers)│
+        └─────────────────────┘  └───────────────────┘  └─────────────────────┘
 ```
 
-## Compile and run the project
+---
 
-```bash
-# development
-$ yarn run start
+## 🛠️ Tech Stack
 
-# watch mode
-$ yarn run start:dev
+- **Framework**: NestJS 10 (TypeScript)
+- **Database**: PostgreSQL (Neon Cloud DB) with Prisma ORM 6
+- **Queueing & Async Tasks**: BullMQ + Redis
+- **Containerization**: Docker Engine (Dockerode SDK)
+- **AI Models**: Vercel AI SDK (`@ai-sdk/anthropic`)
+- **WebSockets**: `@nestjs/websockets` + `socket.io`
+- **Monetization**: Lemon Squeezy Webhooks & RevenueCat SDK
 
-# production mode
-$ yarn run start:prod
+---
+
+## 🔑 Environment Variables
+
+Create a `.env` file in the root directory:
+
+```env
+# Application
+PORT=3000
+NODE_ENV=development
+
+# Database (PostgreSQL / Neon)
+DATABASE_URL="postgresql://user:password@host.neon.tech/neondb?sslmode=require"
+
+# Anthropic AI API Key
+ANTHROPIC_API_KEY="sk-ant-api03-..."
+
+# GitHub OAuth App Credentials
+GITHUB_CLIENT_ID="your_github_client_id"
+GITHUB_CLIENT_SECRET="your_github_client_secret"
+GITHUB_CALLBACK_URL="https://your-domain.com/auth/github/callback"
+
+# Redis (BullMQ Queue)
+REDIS_HOST="localhost"
+REDIS_PORT=6379
+REDIS_PASSWORD=""
+
+# Lemon Squeezy (Web Payments)
+LEMONSQUEEZY_WEBHOOK_SECRET="your_lemonsqueezy_secret"
+
+# RevenueCat (Mobile Subscriptions)
+REVENUECAT_WEBHOOK_SECRET="your_revenuecat_secret"
 ```
 
-## Run tests
+---
 
-```bash
-# unit tests
-$ yarn run test
+## 🚀 Getting Started
 
-# e2e tests
-$ yarn run test:e2e
+### Prerequisites
 
-# test coverage
-$ yarn run test:cov
-```
+- Node.js >= 18.x
+- Docker Engine running locally or on server
+- PostgreSQL database (or Neon DB instance)
+- Redis server (or Upstash Redis)
 
-## Deployment
+### Installation
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
+1. **Clone the repository**:
+   ```bash
+   git clone https://github.com/Success1050/pocketDev-backend.git
+   cd pocketDev-backend
+   ```
 
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+2. **Install dependencies**:
+   ```bash
+   npm install
+   ```
 
-```bash
-$ yarn install -g @nestjs/mau
-$ mau deploy
-```
+3. **Database Migration & Prisma Client**:
+   ```bash
+   npx prisma migrate dev
+   npx prisma generate
+   ```
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+4. **Start the Development Server**:
+   ```bash
+   npm run start:dev
+   ```
 
-## Resources
+5. **Build for Production**:
+   ```bash
+   npm run build
+   npm run start:prod
+   ```
 
-Check out a few resources that may come in handy when working with NestJS:
+---
 
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
+## 💖 Supporting the Project & Token Funding
 
-## Support
+Running state-of-the-art LLMs (such as **Claude Opus 5** and **Claude Sonnet 5**) alongside Docker container infrastructure incurs **substantial API token and cloud server expenses**. 
 
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
+If you find **PocketDev** valuable, love the project, or want to support our mission to bring friction-free mobile software engineering to everyone, please consider **sponsoring or contributing token credits**:
 
-## Stay in touch
+- **Anthropic API Credits / Token Grants**: Help us keep high-capacity AI models accessible to open-source developers.
+- **Sponsorship & Donations**: Get in touch to support server infrastructure (AWS EC2, Neon DB, Redis).
 
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
+---
 
-## License
+## 📬 Contact & Developer Info
 
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+Developed with ❤️ by **Emmanuel Ekwunife**.
+
+- 📧 **Email**: [emmanuelekwunife58@gmail.com](mailto:emmanuelekwunife58@gmail.com)
+- 🐙 **GitHub**: [@Success1050](https://github.com/Success1050)
+- 💼 **Project Status**: Currently in active **MVP Testing**. Feedback & contributions are warmly welcomed!
+
+---
+
+## 📄 License
+
+This project is licensed under the [MIT License](LICENSE).
